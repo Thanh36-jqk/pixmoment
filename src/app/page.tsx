@@ -8,6 +8,7 @@ import {
   CheckCircle2, X, FileImage, Loader2, Heart, Smartphone, Download
 } from "lucide-react";
 import { cn, formatBytes } from "@/lib/utils";
+import { uploadFilesWithConcurrency } from "@/lib/uploadQueue";
 import { nanoid } from "nanoid";
 
 interface FileItem {
@@ -63,55 +64,39 @@ export default function HomePage() {
     setUploading(true);
     setStep("uploading");
 
+    const results = await uploadFilesWithConcurrency(
+      files.map((f) => ({ id: f.id, file: f.file })),
+      {
+        onStart: (id) => {
+          setFiles((prev) =>
+            prev.map((f) => (f.id === id ? { ...f, status: "uploading", progress: 0 } : f))
+          );
+        },
+        onProgress: (id, percentage) => {
+          setFiles((prev) =>
+            prev.map((f) => (f.id === id ? { ...f, progress: percentage } : f))
+          );
+        },
+      }
+    );
+
     const uploadedPhotos: { name: string; size: number; type: string; url: string }[] = [];
 
-    for (const item of files) {
-      setFiles((prev) =>
-        prev.map((f) => f.id === item.id ? { ...f, status: "uploading" } : f)
-      );
-
-      try {
-        const formData = new FormData();
-        formData.append("file", item.file);
-
-        const interval = setInterval(() => {
-          setFiles((prev) =>
-            prev.map((f) =>
-              f.id === item.id && f.progress < 85
-                ? { ...f, progress: f.progress + 15 }
-                : f
-            )
-          );
-        }, 300);
-
-        const res = await fetch("/api/upload", {
-          method: "POST",
-          body: formData,
-        });
-
-        clearInterval(interval);
-
-        if (!res.ok) throw new Error("Upload failed");
-        const data = await res.json();
-
-        uploadedPhotos.push({
-          name: item.file.name,
-          size: item.file.size,
-          type: item.file.type,
-          url: data.url,
-        });
-
-        setFiles((prev) =>
-          prev.map((f) =>
-            f.id === item.id ? { ...f, status: "done", progress: 100, url: data.url } : f
-          )
-        );
-      } catch {
-        setFiles((prev) =>
-          prev.map((f) => f.id === item.id ? { ...f, status: "error" } : f)
-        );
-      }
-    }
+    setFiles((prev) =>
+      prev.map((f) => {
+        const result = results.find((r) => r.id === f.id);
+        if (result?.blob) {
+          uploadedPhotos.push({
+            name: f.file.name,
+            size: f.file.size,
+            type: f.file.type,
+            url: result.blob.url,
+          });
+          return { ...f, status: "done", progress: 100, url: result.blob.url };
+        }
+        return { ...f, status: "error" };
+      })
+    );
 
     const albumRes = await fetch("/api/albums", {
       method: "POST",

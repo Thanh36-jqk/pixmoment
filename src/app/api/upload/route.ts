@@ -1,29 +1,33 @@
-import { put } from "@vercel/blob";
-import { NextRequest, NextResponse } from "next/server";
-import { nanoid } from "nanoid";
+import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
+import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-export async function POST(req: NextRequest) {
-  const formData = await req.formData();
-  const file = formData.get("file") as File | null;
+// Issues short-lived client tokens so the browser uploads bytes straight to
+// Vercel Blob instead of routing every photo through this serverless
+// function — needed once uploads scale to 50-100 photos at a time, since a
+// server round-trip per file would hit the function body-size limit and
+// serialize all the network traffic through a single invocation.
+export async function POST(request: Request): Promise<NextResponse> {
+  const body = (await request.json()) as HandleUploadBody;
 
-  if (!file) {
-    return NextResponse.json({ error: "No file provided" }, { status: 400 });
+  try {
+    const jsonResponse = await handleUpload({
+      body,
+      request,
+      onBeforeGenerateToken: async () => ({
+        allowedContentTypes: ["image/*"],
+        addRandomSuffix: false,
+        maximumSizeInBytes: 200 * 1024 * 1024,
+      }),
+      onUploadCompleted: async () => {},
+    });
+
+    return NextResponse.json(jsonResponse);
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Upload token error" },
+      { status: 400 }
+    );
   }
-
-  const ext = file.name.split(".").pop() ?? "jpg";
-  const filename = `photos/${nanoid()}.${ext}`;
-
-  const blob = await put(filename, file, {
-    access: "public",
-    contentType: file.type,
-  });
-
-  return NextResponse.json({
-    url: blob.url,
-    name: file.name,
-    size: file.size,
-    type: file.type,
-  });
 }
