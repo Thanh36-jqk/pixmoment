@@ -1,26 +1,152 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #0a0a0f;
+  --foreground: #f0f0f5;
+  --accent: #c084fc;
+  --accent2: #f472b6;
+  --glass: rgba(255,255,255,0.05);
+  --glass-border: rgba(255,255,255,0.1);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-accent: var(--accent);
+  --color-accent2: var(--accent2);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: 'Inter', system-ui, sans-serif;
+  min-height: 100vh;
+  min-height: 100dvh; /* dynamic viewport height — fix iOS Safari bottom bar */
+  overscroll-behavior: none;
+}
+
+/* iOS safe area padding */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Prevent text size adjustment on orientation change */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Smooth scroll on iOS */
+.overflow-y-auto, .overflow-y-scroll {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(192,132,252,0.3); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(192,132,252,0.6); }
+
+/* Glass effect */
+.glass {
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+/* Gradient text */
+.gradient-text {
+  background: linear-gradient(135deg, #c084fc, #f472b6, #fb923c);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Glow */
+.glow-purple {
+  box-shadow: 0 0 30px rgba(192,132,252,0.2), 0 0 60px rgba(192,132,252,0.1);
+}
+
+/* Upload zone */
+.upload-zone {
+  background: linear-gradient(135deg, rgba(192,132,252,0.05), rgba(244,114,182,0.05));
+  border: 2px dashed rgba(192,132,252,0.3);
+  transition: all 0.3s ease;
+}
+.upload-zone:hover, .upload-zone.active {
+  background: linear-gradient(135deg, rgba(192,132,252,0.1), rgba(244,114,182,0.1));
+  border-color: rgba(192,132,252,0.6);
+  box-shadow: 0 0 40px rgba(192,132,252,0.15);
+}
+
+/* Progress bar */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.progress-shimmer {
+  background: linear-gradient(90deg, #c084fc, #f472b6, #c084fc);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* Masonry */
+.masonry {
+  columns: 2;
+  gap: 12px;
+}
+@media (min-width: 640px) { .masonry { columns: 3; } }
+@media (min-width: 1024px) { .masonry { columns: 4; } }
+.masonry-item {
+  break-inside: avoid;
+  margin-bottom: 12px;
+}
+
+/* Floating particles */
+@keyframes float {
+  0%, 100% { transform: translateY(0px) rotate(0deg); opacity: 0.4; }
+  50% { transform: translateY(-20px) rotate(180deg); opacity: 0.8; }
+}
+.particle {
+  animation: float linear infinite;
+}
+
+/* Button glow */
+.btn-primary {
+  background: linear-gradient(135deg, #c084fc, #f472b6);
+  transition: all 0.3s ease;
+}
+.btn-primary:hover {
+  box-shadow: 0 8px 30px rgba(192,132,252,0.4);
+  transform: translateY(-2px);
+}
+
+/* Card hover */
+.photo-card {
+  transition: all 0.3s ease;
+}
+.photo-card:hover {
+  transform: scale(1.02);
+  box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+}
+
+/* Animate in */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-up { animation: fadeUp 0.5s ease forwards; }
+
+/* Background mesh */
+.bg-mesh {
+  background-image:
+    radial-gradient(ellipse at 20% 20%, rgba(192,132,252,0.15) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 80%, rgba(244,114,182,0.1) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 50%, rgba(251,146,60,0.05) 0%, transparent 70%);
 }
