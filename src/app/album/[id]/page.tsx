@@ -338,7 +338,7 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
               key={photo.url}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.04, duration: 0.4 }}
+              transition={{ delay: Math.min(i * 0.04, 0.5), duration: 0.4 }}
               className="masonry-item"
             >
               <div className="photo-card group relative rounded-xl overflow-hidden bg-white/5 cursor-pointer">

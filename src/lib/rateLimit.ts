@@ -23,21 +23,28 @@ if (!redis && process.env.NODE_ENV !== "test") {
   );
 }
 
-// A batch of 100 photos issues ~100 requests to the token route in a few
-// minutes; these windows stay generous for that case while still capping
-// sustained/scripted abuse.
+// A batch of 200 photos issues ~200 requests to the token route in a few
+// minutes — and each internal retry (see uploadQueue.ts, up to 2 per file
+// on flaky connections) requests a fresh token too, so a straight 200 cap
+// left zero headroom: any retries at all during a full-size batch would
+// self-inflict 429s indistinguishable from a real network failure. 500
+// gives real headroom for that case while still being far below what
+// scripted abuse would need to matter.
 export const uploadTokenRatelimit = redis
   ? new Ratelimit({
       redis,
-      limiter: Ratelimit.slidingWindow(200, "10 m"),
+      limiter: Ratelimit.slidingWindow(500, "10 m"),
       prefix: "ratelimit:upload-token",
     })
   : null;
 
+// The iOS Shortcut has no retry logic of its own — one request per photo,
+// no multiplier — but 150 was already below the 200-photo batches this
+// app advertises, so any such batch would guarantee-fail partway through.
 export const uploadRawRatelimit = redis
   ? new Ratelimit({
       redis,
-      limiter: Ratelimit.slidingWindow(150, "10 m"),
+      limiter: Ratelimit.slidingWindow(400, "10 m"),
       prefix: "ratelimit:upload-raw",
     })
   : null;

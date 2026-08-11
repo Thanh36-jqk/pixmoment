@@ -485,7 +485,7 @@ export default function HomePage() {
                           initial={{ opacity: 0, scale: 0.7 }}
                           animate={{ opacity: 1, scale: 1 }}
                           exit={{ opacity: 0, scale: 0.7 }}
-                          transition={{ delay: i * 0.04 }}
+                          transition={{ delay: Math.min(i * 0.04, 0.5) }}
                           className="photo-card relative group aspect-square rounded-xl overflow-hidden bg-white/5"
                         >
                           <img src={item.preview} alt={item.file.name} className="w-full h-full object-cover" />
