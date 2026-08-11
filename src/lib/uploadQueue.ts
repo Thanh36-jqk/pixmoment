@@ -5,7 +5,7 @@ import type { PutBlobResult } from "@vercel/blob";
 // (and the browser's own per-host connection limit) at once — a handful of
 // parallel uploads finishes far faster than one-at-a-time while staying
 // well clear of connection throttling and mobile-network flakiness.
-const CONCURRENCY = 4;
+const DEFAULT_CONCURRENCY = 4;
 const MAX_RETRIES = 2;
 const RETRY_BASE_DELAY_MS = 500;
 // Vercel's own guidance: "For files over 100 MB, use multipart" — below
@@ -32,6 +32,34 @@ export interface UploadCallbacks {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Non-standard API — not in TS's DOM lib, and Safari (desktop + iOS) has
+// zero support for it, so this only ever kicks in on Chromium/Android.
+// Everywhere else silently keeps DEFAULT_CONCURRENCY, unchanged.
+interface NetworkInformationLike {
+  effectiveType?: "slow-2g" | "2g" | "3g" | "4g";
+  saveData?: boolean;
+}
+
+function getAdaptiveConcurrency(): number {
+  if (typeof navigator === "undefined") return DEFAULT_CONCURRENCY;
+
+  const connection = (navigator as Navigator & { connection?: NetworkInformationLike }).connection;
+  if (!connection) return DEFAULT_CONCURRENCY;
+
+  // Respect the user's explicit data-saver preference over anything else.
+  if (connection.saveData) return 1;
+
+  switch (connection.effectiveType) {
+    case "slow-2g":
+    case "2g":
+      return 1;
+    case "3g":
+      return 2;
+    default:
+      return DEFAULT_CONCURRENCY;
+  }
 }
 
 async function uploadOne(task: UploadTask, callbacks: UploadCallbacks): Promise<UploadResult> {
@@ -92,7 +120,11 @@ export class UploadManager {
   }
 
   private pump() {
-    while (this.active < CONCURRENCY && this.queue.length > 0) {
+    // Re-read on every pump (called on each enqueue and each settled
+    // upload) rather than caching once, so a mid-batch network change
+    // (e.g. wifi → cellular) is picked up for the next slot that opens up.
+    const concurrency = getAdaptiveConcurrency();
+    while (this.active < concurrency && this.queue.length > 0) {
       const task = this.queue.shift();
       if (!task) break;
       this.active++;
