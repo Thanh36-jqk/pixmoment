@@ -4,11 +4,15 @@ import { verifyPassword } from "@/lib/password";
 
 export const runtime = "nodejs";
 
+// nanoid's default alphabet — album ids are generated with nanoid(10).
+const VALID_ID = /^[A-Za-z0-9_-]{1,32}$/;
+
 // Album JSON is written with access: "private" (see /api/albums) — get()
 // is the SDK's authenticated read path for that; a plain fetch(url) only
 // works for public blobs, which is exactly what let anyone bypass the
 // password check before by hitting the storage URL directly.
 async function readAlbum(id: string) {
+  if (!VALID_ID.test(id)) return null;
   const result = await get(`albums/${id}.json`, { access: "private" });
   if (!result || result.statusCode !== 200) return null;
   const text = await new Response(result.stream).text();

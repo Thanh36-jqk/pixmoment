@@ -107,6 +107,10 @@ export default function HomePage() {
 
   const handleUpload = async () => {
     if (files.length === 0) return;
+    if (usePassword && !password.trim()) {
+      toast("Đã bật mật khẩu nhưng chưa nhập — điền mật khẩu hoặc tắt tuỳ chọn này", "error");
+      return;
+    }
     setUploading(true);
     setUploadError(null);
     setUploadFailCount(0);
@@ -658,7 +662,16 @@ export default function HomePage() {
                   Xem album
                 </motion.a>
                 <button
-                  onClick={() => { clearAllFiles(); setAlbumId(null); setStep("upload"); setTitle(""); setUploadFailCount(0); }}
+                  onClick={() => {
+                    clearAllFiles();
+                    setAlbumId(null);
+                    setStep("upload");
+                    setTitle("");
+                    setUploadFailCount(0);
+                    setUsePassword(false);
+                    setPassword("");
+                    setExpiry("never");
+                  }}
                   className="px-8 py-3.5 rounded-xl font-semibold text-white/50 border border-white/10 hover:border-white/20 hover:text-white/70 transition-all"
                 >
                   Tạo album mới

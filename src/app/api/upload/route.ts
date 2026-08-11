@@ -30,11 +30,19 @@ export async function POST(request: Request): Promise<NextResponse> {
     const jsonResponse = await handleUpload({
       body,
       request,
-      onBeforeGenerateToken: async () => ({
-        allowedContentTypes: ["image/*"],
-        addRandomSuffix: false,
-        maximumSizeInBytes: 200 * 1024 * 1024,
-      }),
+      onBeforeGenerateToken: async (pathname) => {
+        // The client is untrusted (no auth on this route) and gets to name
+        // its own pathname — without this check it could request a token
+        // for any path in the store, e.g. under albums/ instead of photos/.
+        if (!pathname.startsWith("photos/")) {
+          throw new Error("Invalid upload path");
+        }
+        return {
+          allowedContentTypes: ["image/*"],
+          addRandomSuffix: false,
+          maximumSizeInBytes: 200 * 1024 * 1024,
+        };
+      },
       onUploadCompleted: async () => {},
     });
 
