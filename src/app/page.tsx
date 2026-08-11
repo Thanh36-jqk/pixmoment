@@ -71,6 +71,43 @@ export default function HomePage() {
     return () => window.removeEventListener("beforeunload", handler);
   }, [anyFileInFlight]);
 
+  // Keep the screen on while uploading — mobile OSes dim/lock the screen
+  // after a short idle, and a locked screen is a common way the browser
+  // ends up suspending the tab mid-batch. Not a fix for switching away to
+  // another app, just for the far more common "phone sits there waiting"
+  // case. Feature-detected — unsupported browsers just skip this quietly.
+  useEffect(() => {
+    if (!anyFileInFlight || !("wakeLock" in navigator)) return;
+
+    let cancelled = false;
+    let lock: WakeLockSentinel | null = null;
+
+    const requestLock = async () => {
+      try {
+        const sentinel = await navigator.wakeLock.request("screen");
+        if (cancelled) {
+          sentinel.release().catch(() => {});
+          return;
+        }
+        lock = sentinel;
+      } catch {
+        // Denied or not allowed in this context (e.g. backgrounded) — fine, best-effort only.
+      }
+    };
+    requestLock();
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible" && !lock) requestLock();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", handleVisibility);
+      lock?.release().catch(() => {});
+    };
+  }, [anyFileInFlight]);
+
   // Files start uploading the instant they're dropped — while the user is
   // still filling in the album title/password — instead of waiting for the
   // "Tạo album" click. The manager is created once and fed incrementally;
@@ -462,15 +499,16 @@ export default function HomePage() {
                               <AlertTriangle className="w-4 h-4 text-red-200" />
                             </div>
                           )}
-                          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent opacity-0 sm:group-hover:opacity-100 transition-opacity" />
+                          {/* Always visible on touch devices — :hover doesn't reliably reveal these on mobile */}
                           <button
                             onClick={() => removeFile(item.id)}
-                            className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                            className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/70 flex items-center justify-center opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                           >
-                            <X className="w-3 h-3 text-white" />
+                            <X className="w-3.5 h-3.5 text-white" />
                           </button>
-                          <div className="absolute bottom-1 left-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <p className="text-white text-[8px] truncate">{formatBytes(item.file.size)}</p>
+                          <div className="absolute bottom-1 left-1 right-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                            <p className="text-white text-[8px] truncate bg-black/50 rounded px-1">{formatBytes(item.file.size)}</p>
                           </div>
                         </motion.div>
                       ))}
@@ -494,7 +532,7 @@ export default function HomePage() {
                         placeholder="Tên album • vd: Ngày hẹn hò 07/06 🌸"
                         value={title}
                         onChange={(e) => setTitle(e.target.value)}
-                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/25 focus:outline-none focus:border-purple-400/50 transition-colors"
+                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-base text-white placeholder-white/25 focus:outline-none focus:border-purple-400/50 transition-colors"
                       />
 
                       <div className="flex flex-wrap gap-3">
@@ -521,7 +559,7 @@ export default function HomePage() {
                               placeholder="Nhập mật khẩu..."
                               value={password}
                               onChange={(e) => setPassword(e.target.value)}
-                              className="flex-1 min-w-32 bg-white/5 border border-purple-400/30 rounded-xl px-4 py-2.5 text-sm text-white placeholder-white/25 focus:outline-none focus:border-purple-400/60 transition-colors"
+                              className="flex-1 min-w-32 bg-white/5 border border-purple-400/30 rounded-xl px-4 py-2.5 text-base text-white placeholder-white/25 focus:outline-none focus:border-purple-400/60 transition-colors"
                             />
                           )}
                         </AnimatePresence>

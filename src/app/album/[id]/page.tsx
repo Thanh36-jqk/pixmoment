@@ -222,7 +222,7 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
               onChange={(e) => { setPassword(e.target.value); setPwError(false); }}
               onKeyDown={(e) => e.key === "Enter" && unlockAlbum()}
               className={cn(
-                "w-full bg-white/5 border rounded-xl px-4 py-3 text-sm text-white placeholder-white/30 focus:outline-none transition-colors",
+                "w-full bg-white/5 border rounded-xl px-4 py-3 text-base text-white placeholder-white/30 focus:outline-none transition-colors",
                 pwError ? "border-red-500/60" : "border-white/10 focus:border-purple-400/50"
               )}
             />

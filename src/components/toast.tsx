@@ -55,7 +55,8 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         role="status"
         aria-live="polite"
         aria-atomic="false"
-        className="fixed bottom-4 inset-x-0 z-[100] flex flex-col items-center gap-2 px-4 pointer-events-none"
+        className="fixed inset-x-0 z-[100] flex flex-col items-center gap-2 px-4 pointer-events-none"
+        style={{ bottom: "calc(1rem + env(safe-area-inset-bottom, 0px))" }}
       >
         <AnimatePresence>
           {toasts.map((t) => {

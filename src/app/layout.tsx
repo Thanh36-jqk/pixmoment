@@ -18,8 +18,11 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,        // ngăn iOS auto-zoom khi focus input
-  userScalable: false,
+  // Zoom is left enabled (no maximumScale/userScalable) — blocking it broke
+  // pinch-zoom for everyone to work around iOS auto-zooming into inputs
+  // under 16px font-size. Fixed at the source instead: every input on the
+  // site is text-base (16px)+, which is exactly the threshold iOS uses to
+  // decide whether to zoom in on focus.
   viewportFit: "cover",   // full-screen kể cả notch
   themeColor: "#0a0a0f",
 };
