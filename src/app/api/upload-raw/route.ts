@@ -1,11 +1,18 @@
 import { put } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
 import { nanoid } from "nanoid";
+import { getClientIp, isRateLimited, uploadRawRatelimit } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 
-// Called by iOS Shortcut — receives raw binary body, not multipart
+// Called by iOS Shortcut — receives raw binary body, not multipart.
+// Unlike /api/upload there's no token step at all here, so this is rate
+// limited the same way for the same reason: no auth to gate on.
 export async function POST(req: NextRequest) {
+  if (await isRateLimited(uploadRawRatelimit, getClientIp(req))) {
+    return NextResponse.json({ error: "Too many upload requests, try again later" }, { status: 429 });
+  }
+
   const contentType = req.headers.get("content-type") ?? "image/jpeg";
   const filename = req.headers.get("x-filename") ?? `photo-${nanoid()}.jpg`;
   const ext = filename.split(".").pop() ?? "jpg";

@@ -8,10 +8,10 @@ import type { PutBlobResult } from "@vercel/blob";
 const CONCURRENCY = 4;
 const MAX_RETRIES = 2;
 const RETRY_BASE_DELAY_MS = 500;
-// Matches the SDK's own part size — multipart only pays off once a file is
-// actually big enough to be split; below this it just adds two wasted
-// round trips (create + complete) on top of a plain single-request PUT.
-const MULTIPART_THRESHOLD_BYTES = 8 * 1024 * 1024;
+// Vercel's own guidance: "For files over 100 MB, use multipart" — below
+// that, a plain single-request PUT is simpler and just as reliable, and
+// skips the two extra round trips (create + complete) multipart adds.
+const MULTIPART_THRESHOLD_BYTES = 100 * 1024 * 1024;
 
 export interface UploadTask {
   id: string;

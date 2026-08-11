@@ -1,6 +1,7 @@
 import { put } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
 import { nanoid } from "nanoid";
+import { albumCreateRatelimit, getClientIp, isRateLimited } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 
@@ -13,6 +14,10 @@ function getExpiryDate(expiresIn: string): string | undefined {
 }
 
 export async function POST(req: NextRequest) {
+  if (await isRateLimited(albumCreateRatelimit, getClientIp(req))) {
+    return NextResponse.json({ error: "Too many requests, try again later" }, { status: 429 });
+  }
+
   const body = await req.json();
   const { title, photos: rawPhotos, password, expiresIn } = body;
 
