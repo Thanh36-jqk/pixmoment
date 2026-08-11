@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useDropzone } from "react-dropzone";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Upload, ImageIcon, Sparkles, Lock, Clock, ArrowRight,
-  CheckCircle2, X, FileImage, Loader2, Heart, Smartphone, Download
+  CheckCircle2, X, FileImage, Loader2, Heart, Smartphone, Download, AlertTriangle
 } from "lucide-react";
 import { cn, formatBytes } from "@/lib/utils";
 import { uploadFilesWithConcurrency } from "@/lib/uploadQueue";
@@ -18,6 +18,7 @@ interface FileItem {
   status: "pending" | "uploading" | "done" | "error";
   progress: number;
   url?: string;
+  error?: string;
 }
 
 export default function HomePage() {
@@ -31,12 +32,28 @@ export default function HomePage() {
   const [step, setStep] = useState<"upload" | "uploading" | "done">("upload");
   const [isIOS, setIsIOS] = useState(false);
   const [showIOSGuide, setShowIOSGuide] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadFailCount, setUploadFailCount] = useState(0);
 
   useEffect(() => {
     const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as unknown as Record<string,unknown>).MSStream;
     setIsIOS(ios);
   }, []);
   const [copied, setCopied] = useState(false);
+
+  // Keep a live ref so the unmount cleanup below can revoke whatever
+  // previews exist at that point, without re-registering the effect on
+  // every files change.
+  const filesRef = useRef<FileItem[]>([]);
+  useEffect(() => {
+    filesRef.current = files;
+  }, [files]);
+
+  useEffect(() => {
+    return () => {
+      filesRef.current.forEach((f) => URL.revokeObjectURL(f.preview));
+    };
+  }, []);
 
   const onDrop = useCallback((accepted: File[]) => {
     const newItems: FileItem[] = accepted.map((file) => ({
@@ -56,12 +73,25 @@ export default function HomePage() {
   });
 
   const removeFile = (id: string) => {
-    setFiles((prev) => prev.filter((f) => f.id !== id));
+    setFiles((prev) => {
+      const target = prev.find((f) => f.id === id);
+      if (target) URL.revokeObjectURL(target.preview);
+      return prev.filter((f) => f.id !== id);
+    });
+  };
+
+  const clearAllFiles = () => {
+    setFiles((prev) => {
+      prev.forEach((f) => URL.revokeObjectURL(f.preview));
+      return [];
+    });
   };
 
   const handleUpload = async () => {
     if (files.length === 0) return;
     setUploading(true);
+    setUploadError(null);
+    setUploadFailCount(0);
     setStep("uploading");
 
     const results = await uploadFilesWithConcurrency(
@@ -69,7 +99,7 @@ export default function HomePage() {
       {
         onStart: (id) => {
           setFiles((prev) =>
-            prev.map((f) => (f.id === id ? { ...f, status: "uploading", progress: 0 } : f))
+            prev.map((f) => (f.id === id ? { ...f, status: "uploading", progress: 0, error: undefined } : f))
           );
         },
         onProgress: (id, percentage) => {
@@ -81,6 +111,7 @@ export default function HomePage() {
     );
 
     const uploadedPhotos: { name: string; size: number; type: string; url: string }[] = [];
+    let failCount = 0;
 
     setFiles((prev) =>
       prev.map((f) => {
@@ -94,9 +125,19 @@ export default function HomePage() {
           });
           return { ...f, status: "done", progress: 100, url: result.blob.url };
         }
-        return { ...f, status: "error" };
+        failCount += 1;
+        return { ...f, status: "error", error: result?.error };
       })
     );
+
+    if (uploadedPhotos.length === 0) {
+      setUploading(false);
+      setStep("upload");
+      setUploadError(`Cả ${failCount} ảnh đều upload thất bại. Kiểm tra mạng rồi bấm tạo album lại để thử lại.`);
+      return;
+    }
+
+    setUploadFailCount(failCount);
 
     const albumRes = await fetch("/api/albums", {
       method: "POST",
@@ -127,6 +168,8 @@ export default function HomePage() {
 
   const totalSize = files.reduce((acc, f) => acc + f.file.size, 0);
   const doneCount = files.filter(f => f.status === "done").length;
+  const errorCount = files.filter(f => f.status === "error").length;
+  const remainingCount = files.length - doneCount - errorCount;
 
   return (
     <div className="min-h-screen bg-mesh relative overflow-hidden">
@@ -174,6 +217,27 @@ export default function HomePage() {
               transition={{ duration: 0.4 }}
               className="space-y-8"
             >
+              {/* Upload failure banner */}
+              <AnimatePresence>
+                {uploadError && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="rounded-2xl border border-red-400/30 bg-red-500/10 p-4 flex items-start gap-3"
+                  >
+                    <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-red-300">Upload thất bại</p>
+                      <p className="text-xs text-red-400/70 mt-0.5">{uploadError}</p>
+                    </div>
+                    <button onClick={() => setUploadError(null)} className="shrink-0 text-red-400/50 hover:text-red-300">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
               {/* iOS banner */}
               <AnimatePresence>
                 {isIOS && (
@@ -280,7 +344,7 @@ export default function HomePage() {
                         <span className="text-white font-semibold">{formatBytes(totalSize)}</span>
                       </span>
                       <button
-                        onClick={() => setFiles([])}
+                        onClick={clearAllFiles}
                         className="text-white/30 hover:text-red-400 transition-colors text-xs"
                       >
                         Xóa tất cả
@@ -434,12 +498,20 @@ export default function HomePage() {
                 </div>
                 <h2 className="text-2xl font-bold">Đang upload...</h2>
                 <p className="text-white/40 text-sm">
-                  {doneCount}/{files.length} ảnh hoàn tất — giữ nguyên chất lượng gốc
+                  <span className="text-green-400 font-semibold">{doneCount} xong</span>
+                  {" · "}
+                  <span>{remainingCount} còn lại</span>
+                  {errorCount > 0 && (
+                    <>
+                      {" · "}
+                      <span className="text-red-400 font-semibold">{errorCount} lỗi</span>
+                    </>
+                  )}
                 </p>
-                {/* Overall progress */}
+                {/* Overall progress (counts settled items so it doesn't stall on failures) */}
                 <div className="w-full max-w-xs mx-auto h-1 bg-white/10 rounded-full overflow-hidden mt-4">
                   <motion.div
-                    animate={{ width: `${files.length ? (doneCount / files.length) * 100 : 0}%` }}
+                    animate={{ width: `${files.length ? ((doneCount + errorCount) / files.length) * 100 : 0}%` }}
                     className="h-full progress-shimmer rounded-full"
                   />
                 </div>
@@ -497,8 +569,14 @@ export default function HomePage() {
               <div>
                 <h2 className="text-3xl font-bold">Album sẵn sàng! 🎉</h2>
                 <p className="text-white/40 mt-2">
-                  {files.filter(f => f.status === "done").length} ảnh · {formatBytes(totalSize)} · chất lượng gốc 100%
+                  {doneCount} ảnh · {formatBytes(totalSize)} · chất lượng gốc 100%
                 </p>
+                {uploadFailCount > 0 && (
+                  <p className="text-red-400/80 text-sm mt-1">
+                    {uploadFailCount} ảnh lỗi, không có trong album: {" "}
+                    {files.filter(f => f.status === "error").map(f => f.file.name).join(", ")}
+                  </p>
+                )}
               </div>
 
               <div className="glass rounded-2xl p-6 space-y-3 text-left max-w-md mx-auto">
@@ -534,7 +612,7 @@ export default function HomePage() {
                   Xem album
                 </motion.a>
                 <button
-                  onClick={() => { setFiles([]); setAlbumId(null); setStep("upload"); setTitle(""); }}
+                  onClick={() => { clearAllFiles(); setAlbumId(null); setStep("upload"); setTitle(""); setUploadFailCount(0); }}
                   className="px-8 py-3.5 rounded-xl font-semibold text-white/50 border border-white/10 hover:border-white/20 hover:text-white/70 transition-all"
                 >
                   Tạo album mới

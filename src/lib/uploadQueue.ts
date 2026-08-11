@@ -8,6 +8,10 @@ import type { PutBlobResult } from "@vercel/blob";
 const CONCURRENCY = 4;
 const MAX_RETRIES = 2;
 const RETRY_BASE_DELAY_MS = 500;
+// Matches the SDK's own part size — multipart only pays off once a file is
+// actually big enough to be split; below this it just adds two wasted
+// round trips (create + complete) on top of a plain single-request PUT.
+const MULTIPART_THRESHOLD_BYTES = 8 * 1024 * 1024;
 
 export interface UploadTask {
   id: string;
@@ -41,7 +45,7 @@ async function uploadOne(task: UploadTask, callbacks: UploadCallbacks): Promise<
         access: "public",
         handleUploadUrl: "/api/upload",
         contentType: task.file.type || "application/octet-stream",
-        multipart: true,
+        multipart: task.file.size > MULTIPART_THRESHOLD_BYTES,
         onUploadProgress: ({ percentage }) => callbacks.onProgress?.(task.id, percentage),
       });
       return { id: task.id, blob };
