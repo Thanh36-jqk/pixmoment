@@ -70,7 +70,7 @@ const PhotoGridItem = memo(function PhotoGridItem({
       {/* Always visible on touch devices — :hover doesn't reliably reveal these on mobile */}
       <button
         onClick={() => onRemove(id)}
-        className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/70 flex items-center justify-center opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+        className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/70 flex items-center justify-center opacity-100 sm:opacity-0 sm:group-hover:opacity-100 pointer-events-auto sm:pointer-events-none sm:group-hover:pointer-events-auto transition-opacity"
       >
         <X className="w-3.5 h-3.5 text-white" />
       </button>

@@ -376,8 +376,18 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
                   loading="lazy"
                 />
 
-                {/* Overlay — always visible on mobile (no hover), hover on desktop */}
-                <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all duration-300">
+                {/* Overlay — always visible on mobile (no hover), hover on desktop.
+                    pointer-events must mirror opacity: an invisible-but-interactive
+                    overlay silently blocks clicks meant for the photo underneath
+                    (opacity alone doesn't disable hit-testing). It also needs its
+                    own onClick mirroring the image's — while hovering (the normal
+                    precursor to any real click), this overlay covers the whole
+                    photo, so without this a click anywhere except the tiny
+                    download button would hit the overlay and silently do nothing
+                    instead of opening the lightbox. */}
+                <div
+                  onClick={() => setLightbox(i)}
+                  className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 pointer-events-auto sm:pointer-events-none sm:group-hover:pointer-events-auto transition-all duration-300">
                   <div className="absolute bottom-0 left-0 right-0 p-2 sm:p-3 flex items-end justify-between">
                     <div className="min-w-0 hidden sm:block">
                       <p className="text-white text-xs font-medium truncate">{photo.name}</p>
