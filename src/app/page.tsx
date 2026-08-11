@@ -81,6 +81,45 @@ const PhotoGridItem = memo(function PhotoGridItem({
   );
 });
 
+interface UploadingRowProps {
+  preview: string;
+  fileName: string;
+  fileSize: number;
+  status: FileItem["status"];
+  progress: number;
+}
+
+// Same reasoning as PhotoGridItem above — this list is visible while
+// uploads are still settling (e.g. the user clicked "Tạo album" before a
+// large batch finished), and each row's own progress ticks several times
+// a second. Memoized so only the row whose progress actually changed
+// re-renders instead of all 100-200.
+const UploadingRow = memo(function UploadingRow({ preview, fileName, fileSize, status, progress }: UploadingRowProps) {
+  return (
+    <div className="glass rounded-xl p-3.5 flex items-center gap-3">
+      <img src={preview} alt="" className="w-10 h-10 rounded-lg object-cover shrink-0" />
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium truncate text-white/80">{fileName}</p>
+        <p className="text-xs text-white/30">{formatBytes(fileSize)}</p>
+        {status === "uploading" && (
+          <div className="mt-1.5 h-1 bg-white/10 rounded-full overflow-hidden">
+            <motion.div
+              animate={{ width: `${progress}%` }}
+              className="h-full progress-shimmer rounded-full"
+            />
+          </div>
+        )}
+      </div>
+      <div className="shrink-0">
+        {status === "done" && <CheckCircle2 className="w-5 h-5 text-green-400" />}
+        {status === "uploading" && <Loader2 className="w-5 h-5 text-purple-400 animate-spin" />}
+        {status === "error" && <X className="w-5 h-5 text-red-400" />}
+        {status === "pending" && <div className="w-4 h-4 rounded-full border-2 border-white/20" />}
+      </div>
+    </div>
+  );
+});
+
 export default function HomePage() {
   const toast = useToast();
   const [files, setFiles] = useState<FileItem[]>([]);
@@ -697,27 +736,14 @@ export default function HomePage() {
 
               <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
                 {files.map((item) => (
-                  <div key={item.id} className="glass rounded-xl p-3.5 flex items-center gap-3">
-                    <img src={item.preview} alt="" className="w-10 h-10 rounded-lg object-cover shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate text-white/80">{item.file.name}</p>
-                      <p className="text-xs text-white/30">{formatBytes(item.file.size)}</p>
-                      {item.status === "uploading" && (
-                        <div className="mt-1.5 h-1 bg-white/10 rounded-full overflow-hidden">
-                          <motion.div
-                            animate={{ width: `${item.progress}%` }}
-                            className="h-full progress-shimmer rounded-full"
-                          />
-                        </div>
-                      )}
-                    </div>
-                    <div className="shrink-0">
-                      {item.status === "done" && <CheckCircle2 className="w-5 h-5 text-green-400" />}
-                      {item.status === "uploading" && <Loader2 className="w-5 h-5 text-purple-400 animate-spin" />}
-                      {item.status === "error" && <X className="w-5 h-5 text-red-400" />}
-                      {item.status === "pending" && <div className="w-4 h-4 rounded-full border-2 border-white/20" />}
-                    </div>
-                  </div>
+                  <UploadingRow
+                    key={item.id}
+                    preview={item.preview}
+                    fileName={item.file.name}
+                    fileSize={item.file.size}
+                    status={item.status}
+                    progress={item.progress}
+                  />
                 ))}
               </div>
             </motion.div>
