@@ -155,6 +155,21 @@ export class UploadManager {
     this.enqueue(tasks);
   }
 
+  // Smallest-first instead of drop-order: doesn't change total transfer
+  // time, but a batch mixing regular photos with a couple of huge RAW
+  // files finishes visible photos much sooner this way instead of having
+  // early slots pinned on a 50MB file for a while.
+  private takeSmallestQueued(): UploadTask | undefined {
+    if (this.queue.length === 0) return undefined;
+    let smallestIndex = 0;
+    for (let i = 1; i < this.queue.length; i++) {
+      if (this.queue[i].file.size < this.queue[smallestIndex].file.size) {
+        smallestIndex = i;
+      }
+    }
+    return this.queue.splice(smallestIndex, 1)[0];
+  }
+
   private recordThroughput(bytesPerSecond: number) {
     this.throughputSamples.push(bytesPerSecond);
     if (this.throughputSamples.length > MAX_THROUGHPUT_SAMPLES) {
@@ -183,7 +198,7 @@ export class UploadManager {
     // network change is picked up for the next slot that opens up.
     const concurrency = this.getObservedConcurrency() ?? getAdaptiveConcurrency();
     while (this.active < concurrency && this.queue.length > 0) {
-      const task = this.queue.shift();
+      const task = this.takeSmallestQueued();
       if (!task) break;
       this.active++;
       uploadOne(task, {
