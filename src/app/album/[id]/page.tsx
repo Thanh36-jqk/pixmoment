@@ -17,6 +17,36 @@ interface Photo {
   url: string;
 }
 
+// Fetches photos with bounded concurrency, yielding each as soon as it
+// resolves (order doesn't matter for a zip). Paired with client-zip's
+// lazy async-generator consumption, this keeps only `concurrency` photos'
+// worth of response bodies in flight/memory at a time, instead of every
+// photo in the album at once.
+async function* fetchPhotosConcurrently(photos: Photo[], concurrency: number) {
+  let cursor = 0;
+
+  function launch(slot: number): Promise<{ slot: number; name: string; input: Response }> | null {
+    if (cursor >= photos.length) return null;
+    const photo = photos[cursor++];
+    return fetch(photo.url).then((res) => {
+      if (!res.ok) throw new Error(`Failed to fetch ${photo.name}`);
+      return { slot, name: photo.name, input: res };
+    });
+  }
+
+  const slots: (Promise<{ slot: number; name: string; input: Response }> | null)[] = Array.from(
+    { length: Math.min(concurrency, photos.length) },
+    (_, i) => launch(i)
+  );
+
+  while (slots.some(Boolean)) {
+    const active = slots.filter((s): s is NonNullable<typeof s> => s !== null);
+    const { slot, name, input } = await Promise.race(active);
+    slots[slot] = launch(slot);
+    yield { name, input };
+  }
+}
+
 interface Album {
   id: string;
   title: string;
@@ -113,32 +143,15 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
     setZipping(true);
 
     try {
-      const JSZip = (await import("jszip")).default;
-      const zip = new JSZip();
-      const folder = zip.folder(album.title) ?? zip;
-
-      // Bounded concurrency instead of Promise.all over every photo at
-      // once — at original quality, a 100-200 photo album firing that many
-      // simultaneous fetches would open that many connections and hold
-      // every decoded Blob in memory at once before zipping even starts, a
-      // real crash risk on mobile. This caps how many are in flight, which
-      // doesn't lower the total bytes JSZip needs before it can generate
-      // the archive (that's inherent to zipping client-side), but keeps
-      // peak connections/decode buffers bounded instead of unbounded.
-      const CONCURRENCY = 4;
-      let cursor = 0;
-      const worker = async () => {
-        while (cursor < album.photos.length) {
-          const photo = album.photos[cursor++];
-          const res = await fetch(photo.url);
-          if (!res.ok) throw new Error(`Failed to fetch ${photo.name}`);
-          const blob = await res.blob();
-          folder.file(photo.name, blob);
-        }
-      };
-      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, album.photos.length) }, worker));
-
-      const content = await zip.generateAsync({ type: "blob" });
+      // client-zip streams each input straight into the zip output as it
+      // arrives — unlike JSZip (which buffers every file before it can
+      // generate anything), memory stays roughly constant regardless of
+      // album size instead of holding every original-quality photo at
+      // once. fetchPhotosConcurrently bounds how many are being fetched at
+      // a time so we're not opening 100-200 connections simultaneously either.
+      const { downloadZip } = await import("client-zip");
+      const response = downloadZip(fetchPhotosConcurrently(album.photos, 4));
+      const content = await response.blob();
       const url = URL.createObjectURL(content);
       const a = document.createElement("a");
       a.href = url;
