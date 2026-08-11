@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { cn, formatBytes } from "@/lib/utils";
 import { uploadFilesWithConcurrency } from "@/lib/uploadQueue";
+import { useToast } from "@/components/toast";
 import { nanoid } from "nanoid";
 
 interface FileItem {
@@ -22,6 +23,7 @@ interface FileItem {
 }
 
 export default function HomePage() {
+  const toast = useToast();
   const [files, setFiles] = useState<FileItem[]>([]);
   const [title, setTitle] = useState("");
   const [password, setPassword] = useState("");
@@ -68,6 +70,9 @@ export default function HomePage() {
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
+    onDropRejected: (rejections) => {
+      toast(`${rejections.length} file bị bỏ qua vì không phải ảnh`, "error");
+    },
     accept: { "image/*": [] },
     multiple: true,
   });
@@ -133,37 +138,65 @@ export default function HomePage() {
     if (uploadedPhotos.length === 0) {
       setUploading(false);
       setStep("upload");
-      setUploadError(`Cả ${failCount} ảnh đều upload thất bại. Kiểm tra mạng rồi bấm tạo album lại để thử lại.`);
+      const message = `Cả ${failCount} ảnh đều upload thất bại. Kiểm tra mạng rồi bấm tạo album lại để thử lại.`;
+      setUploadError(message);
+      toast(message, "error");
       return;
     }
 
     setUploadFailCount(failCount);
+    if (failCount > 0) {
+      toast(`${uploadedPhotos.length} ảnh xong, ${failCount} ảnh lỗi`, "error");
+    } else {
+      toast(`${uploadedPhotos.length} ảnh upload thành công`, "success");
+    }
 
-    const albumRes = await fetch("/api/albums", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title: title || "Album của chúng mình",
-        photos: uploadedPhotos,
-        password: usePassword ? password : undefined,
-        expiresIn: expiry,
-      }),
-    });
+    let albumRes: Response;
+    try {
+      albumRes = await fetch("/api/albums", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: title || "Album của chúng mình",
+          photos: uploadedPhotos,
+          password: usePassword ? password : undefined,
+          expiresIn: expiry,
+        }),
+      });
+    } catch {
+      setUploading(false);
+      setStep("upload");
+      toast("Không kết nối được để tạo album, ảnh đã upload xong — thử lại", "error");
+      return;
+    }
+
+    if (!albumRes.ok) {
+      setUploading(false);
+      setStep("upload");
+      toast("Tạo album thất bại, ảnh đã upload xong — bấm tạo album lại để thử lại", "error");
+      return;
+    }
 
     const album = await albumRes.json();
     setAlbumId(album.id);
     setUploading(false);
     setStep("done");
+    toast("Album đã sẵn sàng!", "success");
   };
 
   const shareUrl = typeof window !== "undefined" && albumId
     ? `${window.location.origin}/album/${albumId}`
     : "";
 
-  const copyLink = () => {
-    navigator.clipboard.writeText(shareUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      toast("Đã copy link", "success");
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast("Không copy được link, thử bấm giữ để copy thủ công", "error");
+    }
   };
 
   const totalSize = files.reduce((acc, f) => acc + f.file.size, 0);

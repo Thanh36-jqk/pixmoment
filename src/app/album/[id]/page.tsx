@@ -8,6 +8,7 @@ import {
   CheckCircle2, Calendar, HardDrive, Eye
 } from "lucide-react";
 import { cn, formatBytes, formatDate } from "@/lib/utils";
+import { useToast } from "@/components/toast";
 
 interface Photo {
   name: string;
@@ -27,6 +28,7 @@ interface Album {
 }
 
 export default function AlbumPage({ params }: { params: Promise<{ id: string }> }) {
+  const toast = useToast();
   const { id } = use(params);
   const [album, setAlbum] = useState<Album | null>(null);
   const [loading, setLoading] = useState(true);
@@ -46,39 +48,51 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
 
   const fetchAlbum = async () => {
     setLoading(true);
-    const res = await fetch(`/api/albums/${id}`);
-    const data = await res.json();
+    try {
+      const res = await fetch(`/api/albums/${id}`);
+      const data = await res.json();
 
-    if (res.status === 404) { setError("Không tìm thấy album"); setLoading(false); return; }
-    if (res.status === 410) { setError("Album đã hết hạn"); setLoading(false); return; }
+      if (res.status === 404) { setError("Không tìm thấy album"); toast("Không tìm thấy album", "error"); setLoading(false); return; }
+      if (res.status === 410) { setError("Album đã hết hạn"); toast("Album đã hết hạn", "error"); setLoading(false); return; }
 
-    if (data.hasPassword) {
-      setNeedsPassword(true);
+      if (data.hasPassword) {
+        setNeedsPassword(true);
+        setLoading(false);
+        return;
+      }
+
+      setAlbum(data);
       setLoading(false);
-      return;
+    } catch {
+      setError("Không tải được album, kiểm tra mạng và thử lại");
+      toast("Không tải được album", "error");
+      setLoading(false);
     }
-
-    setAlbum(data);
-    setLoading(false);
   };
 
   const unlockAlbum = async () => {
-    const res = await fetch(`/api/albums/${id}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
-    });
+    try {
+      const res = await fetch(`/api/albums/${id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
 
-    if (!res.ok) { setPwError(true); return; }
-    const data = await res.json();
-    setAlbum(data);
-    setNeedsPassword(false);
+      if (!res.ok) { setPwError(true); toast("Mật khẩu không đúng", "error"); return; }
+      const data = await res.json();
+      setAlbum(data);
+      setNeedsPassword(false);
+      toast("Đã mở album", "success");
+    } catch {
+      toast("Không kết nối được, thử lại", "error");
+    }
   };
 
   const downloadPhoto = async (photo: Photo) => {
     setDownloading(photo.url);
     try {
       const res = await fetch(photo.url);
+      if (!res.ok) throw new Error("download failed");
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -86,6 +100,9 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
       a.download = photo.name;
       a.click();
       URL.revokeObjectURL(url);
+      toast(`Đã tải ${photo.name}`, "success");
+    } catch {
+      toast(`Tải ${photo.name} thất bại, thử lại`, "error");
     } finally {
       setTimeout(() => setDownloading(null), 1000);
     }
@@ -95,29 +112,36 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
     if (!album) return;
     setZipping(true);
 
-    const JSZip = (await import("jszip")).default;
-    const zip = new JSZip();
-    const folder = zip.folder(album.title) ?? zip;
+    try {
+      const JSZip = (await import("jszip")).default;
+      const zip = new JSZip();
+      const folder = zip.folder(album.title) ?? zip;
 
-    await Promise.all(
-      album.photos.map(async (photo) => {
-        const res = await fetch(photo.url);
-        const blob = await res.blob();
-        folder.file(photo.name, blob);
-      })
-    );
+      await Promise.all(
+        album.photos.map(async (photo) => {
+          const res = await fetch(photo.url);
+          if (!res.ok) throw new Error(`Failed to fetch ${photo.name}`);
+          const blob = await res.blob();
+          folder.file(photo.name, blob);
+        })
+      );
 
-    const content = await zip.generateAsync({ type: "blob" });
-    const url = URL.createObjectURL(content);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${album.title}.zip`;
-    a.click();
-    URL.revokeObjectURL(url);
+      const content = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(content);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${album.title}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
 
-    setZipping(false);
-    setZipDone(true);
-    setTimeout(() => setZipDone(false), 3000);
+      setZipDone(true);
+      toast("Đã tải ZIP", "success");
+      setTimeout(() => setZipDone(false), 3000);
+    } catch {
+      toast("Nén ZIP thất bại, thử lại", "error");
+    } finally {
+      setZipping(false);
+    }
   };
 
   const prevPhoto = () => {
