@@ -2,6 +2,7 @@ import { put } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
 import { nanoid } from "nanoid";
 import { albumCreateRatelimit, getClientIp, isRateLimited } from "@/lib/rateLimit";
+import { hashPassword } from "@/lib/password";
 
 export const runtime = "nodejs";
 
@@ -19,7 +20,7 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const { title, photos: rawPhotos, password, expiresIn } = body;
+  const { title, photos: rawPhotos, password: rawPassword, expiresIn } = body;
 
   // Shortcut gửi mảng URL strings, web app gửi mảng photo objects
   // Normalise cả hai dạng về cùng format
@@ -36,17 +37,22 @@ export async function POST(req: NextRequest) {
     id,
     title: title || "Album của chúng mình",
     photos,
-    password: password || null,
+    password: rawPassword ? hashPassword(rawPassword) : null,
     expiresAt: getExpiryDate(expiresIn) || null,
     createdAt: new Date().toISOString(),
     totalSize: photos.reduce((acc: number, p) => acc + (p.size ?? 0), 0),
   };
 
+  // Private (not public) — the JSON contains the password hash, and a
+  // public blob at a predictable path (albums/{id}.json, no random suffix)
+  // would let anyone who knows the share link fetch it directly, bypassing
+  // this API entirely.
   await put(`albums/${id}.json`, JSON.stringify(album), {
-    access: "public",
+    access: "private",
     contentType: "application/json",
     allowOverwrite: true,
   });
 
-  return NextResponse.json(album);
+  const { password, ...safeAlbum } = album;
+  return NextResponse.json(safeAlbum);
 }

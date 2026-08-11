@@ -1,7 +1,19 @@
-import { list } from "@vercel/blob";
+import { get } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
+import { verifyPassword } from "@/lib/password";
 
 export const runtime = "nodejs";
+
+// Album JSON is written with access: "private" (see /api/albums) — get()
+// is the SDK's authenticated read path for that; a plain fetch(url) only
+// works for public blobs, which is exactly what let anyone bypass the
+// password check before by hitting the storage URL directly.
+async function readAlbum(id: string) {
+  const result = await get(`albums/${id}.json`, { access: "private" });
+  if (!result || result.statusCode !== 200) return null;
+  const text = await new Response(result.stream).text();
+  return JSON.parse(text);
+}
 
 export async function GET(
   req: NextRequest,
@@ -10,20 +22,17 @@ export async function GET(
   const { id } = await params;
 
   try {
-    const { blobs } = await list({ prefix: `albums/${id}.json` });
-    if (blobs.length === 0) {
+    const album = await readAlbum(id);
+    if (!album) {
       return NextResponse.json({ error: "Album not found" }, { status: 404 });
     }
-
-    const res = await fetch(blobs[0].url);
-    const album = await res.json();
 
     // Check expiry
     if (album.expiresAt && new Date(album.expiresAt) < new Date()) {
       return NextResponse.json({ error: "Album expired" }, { status: 410 });
     }
 
-    // Don't expose password in response
+    // Don't expose the password hash in the response
     const { password, ...safeAlbum } = album;
     return NextResponse.json({
       ...safeAlbum,
@@ -42,15 +51,12 @@ export async function POST(
   const { password: inputPassword } = await req.json();
 
   try {
-    const { blobs } = await list({ prefix: `albums/${id}.json` });
-    if (blobs.length === 0) {
+    const album = await readAlbum(id);
+    if (!album) {
       return NextResponse.json({ error: "Album not found" }, { status: 404 });
     }
 
-    const res = await fetch(blobs[0].url);
-    const album = await res.json();
-
-    if (album.password !== inputPassword) {
+    if (!album.password || typeof inputPassword !== "string" || !verifyPassword(inputPassword, album.password)) {
       return NextResponse.json({ error: "Wrong password" }, { status: 401 });
     }
 

@@ -57,6 +57,19 @@ export default function HomePage() {
     };
   }, []);
 
+  // Warn before an accidental tab close/refresh wipes an in-flight 50-100
+  // photo batch — the browser shows its own generic confirmation text,
+  // custom messages here are ignored by modern browsers.
+  useEffect(() => {
+    if (!uploading) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [uploading]);
+
   const onDrop = useCallback((accepted: File[]) => {
     const newItems: FileItem[] = accepted.map((file) => ({
       id: nanoid(),
