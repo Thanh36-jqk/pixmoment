@@ -21,16 +21,7 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
   const { title, photos: rawPhotos, password: rawPassword, expiresIn } = body;
-
-  // Shortcut gửi mảng URL strings, web app gửi mảng photo objects
-  // Normalise cả hai dạng về cùng format
-  const photos = Array.isArray(rawPhotos)
-    ? rawPhotos.map((p: string | { url: string; name?: string; size?: number; type?: string }) =>
-        typeof p === "string"
-          ? { url: p, name: p.split("/").pop() ?? "photo.heic", size: 0, type: "image/heic" }
-          : p
-      )
-    : [];
+  const photos = Array.isArray(rawPhotos) ? rawPhotos : [];
 
   const id = nanoid(10);
   const album = {

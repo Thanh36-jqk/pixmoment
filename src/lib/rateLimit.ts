@@ -1,12 +1,12 @@
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
 
-// The upload token/raw-upload routes have no user accounts to authenticate
-// against (per Vercel's own guidance: "Without this check, your upload
-// route is open to the public"), so per-IP rate limiting is the practical
-// substitute. Redis-backed so the count is shared across serverless
-// invocations — an in-memory counter would reset per cold start and never
-// actually limit anything.
+// The upload token route has no user accounts to authenticate against (per
+// Vercel's own guidance: "Without this check, your upload route is open to
+// the public"), so per-IP rate limiting is the practical substitute.
+// Redis-backed so the count is shared across serverless invocations — an
+// in-memory counter would reset per cold start and never actually limit
+// anything.
 //
 // Requires UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN (free tier at
 // upstash.com). Without them configured, limiting is skipped (fail open)
@@ -35,17 +35,6 @@ export const uploadTokenRatelimit = redis
       redis,
       limiter: Ratelimit.slidingWindow(500, "10 m"),
       prefix: "ratelimit:upload-token",
-    })
-  : null;
-
-// The iOS Shortcut has no retry logic of its own — one request per photo,
-// no multiplier — but 150 was already below the 200-photo batches this
-// app advertises, so any such batch would guarantee-fail partway through.
-export const uploadRawRatelimit = redis
-  ? new Ratelimit({
-      redis,
-      limiter: Ratelimit.slidingWindow(400, "10 m"),
-      prefix: "ratelimit:upload-raw",
     })
   : null;
 

@@ -5,7 +5,7 @@ import { useDropzone } from "react-dropzone";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Upload, ImageIcon, Sparkles, Lock, Clock, ArrowRight,
-  CheckCircle2, X, FileImage, Loader2, Heart, Smartphone, Download, AlertTriangle
+  CheckCircle2, X, FileImage, Loader2, Heart, Smartphone, AlertTriangle
 } from "lucide-react";
 import { cn, formatBytes } from "@/lib/utils";
 import { UploadManager, type UploadTask } from "@/lib/uploadQueue";
@@ -130,7 +130,6 @@ export default function HomePage() {
   const [albumId, setAlbumId] = useState<string | null>(null);
   const [step, setStep] = useState<"upload" | "uploading" | "done">("upload");
   const [isIOS, setIsIOS] = useState(false);
-  const [showIOSGuide, setShowIOSGuide] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadFailCount, setUploadFailCount] = useState(0);
 
@@ -452,7 +451,7 @@ export default function HomePage() {
                 )}
               </AnimatePresence>
 
-              {/* iOS banner */}
+              {/* iOS tip — no app/install needed, just the picker's own Format option */}
               <AnimatePresence>
                 {isIOS && (
                   <motion.div
@@ -464,15 +463,9 @@ export default function HomePage() {
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold text-amber-300">Bạn đang dùng iPhone</p>
                       <p className="text-xs text-amber-400/70 mt-0.5">
-                        Safari sẽ convert ảnh HEIC → JPEG khi upload. Dùng <strong>iOS Shortcut</strong> để giữ 100% chất lượng gốc.
+                        Để giữ ảnh HEIC gốc 100%: khi bảng chọn ảnh hiện ra, bấm <strong>Options</strong> ở trên cùng → đổi{" "}
+                        <strong>Format</strong> thành <strong>Current</strong> → rồi mới chọn ảnh.
                       </p>
-                      <button
-                        onClick={() => setShowIOSGuide(true)}
-                        className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-amber-300 hover:text-amber-200 transition-colors"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                        Tải Shortcut miễn phí →
-                      </button>
                     </div>
                   </motion.div>
                 )}
@@ -836,83 +829,6 @@ export default function HomePage() {
 
         </AnimatePresence>
       </main>
-
-      {/* iOS Shortcut Guide Modal */}
-      <AnimatePresence>
-        {showIOSGuide && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-4"
-            onClick={() => setShowIOSGuide(false)}
-          >
-            <motion.div
-              initial={{ y: 60, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 60, opacity: 0 }}
-              onClick={e => e.stopPropagation()}
-              className="glass rounded-3xl p-6 w-full max-w-md space-y-5"
-            >
-              {/* Header */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-400 to-pink-400 flex items-center justify-center">
-                    <Smartphone className="w-5 h-5 text-white" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-white">iOS Shortcut</h3>
-                    <p className="text-xs text-white/40">Giữ 100% chất lượng HEIC gốc</p>
-                  </div>
-                </div>
-                <button onClick={() => setShowIOSGuide(false)} className="w-8 h-8 rounded-lg glass flex items-center justify-center">
-                  <X className="w-4 h-4 text-white/60" />
-                </button>
-              </div>
-
-              {/* Why */}
-              <div className="bg-amber-500/10 border border-amber-400/20 rounded-xl p-3 text-xs text-amber-300/80 leading-relaxed">
-                <strong className="text-amber-300">Tại sao cần Shortcut?</strong> Safari tự convert HEIC → JPEG khi chọn từ thư viện ảnh.
-                iOS Shortcuts truy cập trực tiếp file gốc, không qua browser — giữ nguyên HEIC 100%.
-              </div>
-
-              {/* Steps */}
-              <div className="space-y-3">
-                {[
-                  { n: "1", text: "Tải file Shortcut về iPhone", sub: "Nhấn nút bên dưới, Safari tự mở Shortcuts app" },
-                  { n: "2", text: "Nhấn \"Add Shortcut\"", sub: "Shortcut tên \"Pixmoment Upload\" sẽ được thêm vào" },
-                  { n: "3", text: "Mở Shortcuts → chạy Pixmoment Upload", sub: "Chọn ảnh → đặt tên album → link tự copy vào clipboard" },
-                  { n: "4", text: "Gửi link cho người yêu 💕", sub: "Qua Zalo, Messenger, SMS — bất kỳ app nào" },
-                ].map(s => (
-                  <div key={s.n} className="flex items-start gap-3">
-                    <div className="w-6 h-6 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center shrink-0 mt-0.5">
-                      <span className="text-xs font-bold text-white">{s.n}</span>
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-white">{s.text}</p>
-                      <p className="text-xs text-white/40">{s.sub}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Download button */}
-              <a
-                href="/PixmomentUpload.shortcut"
-                download="PixmomentUpload.shortcut"
-                className="btn-primary w-full py-3.5 rounded-xl font-bold text-white flex items-center justify-center gap-2 text-sm"
-              >
-                <Download className="w-4 h-4" />
-                Tải iOS Shortcut (miễn phí)
-              </a>
-
-              <p className="text-center text-xs text-white/25">
-                Yêu cầu iOS 16+ · Shortcuts app (cài sẵn trên iPhone)
-              </p>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }
