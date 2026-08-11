@@ -62,20 +62,42 @@ function getAdaptiveConcurrency(): number {
   }
 }
 
-async function uploadOne(task: UploadTask, callbacks: UploadCallbacks): Promise<UploadResult> {
+interface InternalCallbacks extends UploadCallbacks {
+  // Fired with a bytes/sec sample computed directly from onUploadProgress
+  // deltas — works identically in every browser (Safari included) since
+  // it needs no special API, just our own timing math on real transfers.
+  onThroughputSample?: (bytesPerSecond: number) => void;
+}
+
+async function uploadOne(task: UploadTask, callbacks: InternalCallbacks): Promise<UploadResult> {
   const ext = task.file.name.split(".").pop() ?? "jpg";
   const pathname = `photos/${task.id}.${ext}`;
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     callbacks.onStart?.(task.id);
+    let lastSampleTime = 0;
+    let lastSampleLoaded = 0;
     try {
       const blob = await upload(pathname, task.file, {
         access: "public",
         handleUploadUrl: "/api/upload",
         contentType: task.file.type || "application/octet-stream",
         multipart: task.file.size > MULTIPART_THRESHOLD_BYTES,
-        onUploadProgress: ({ percentage }) => callbacks.onProgress?.(task.id, percentage),
+        onUploadProgress: ({ loaded, percentage }) => {
+          callbacks.onProgress?.(task.id, percentage);
+
+          const now = Date.now();
+          const deltaSeconds = (now - lastSampleTime) / 1000;
+          const deltaBytes = loaded - lastSampleLoaded;
+          // Skip near-zero intervals — the division gets noisy/unreliable
+          // when barely any time or data has passed between samples.
+          if (lastSampleTime > 0 && deltaSeconds > 0.2 && deltaBytes > 0) {
+            callbacks.onThroughputSample?.(deltaBytes / deltaSeconds);
+          }
+          lastSampleTime = now;
+          lastSampleLoaded = loaded;
+        },
       });
       return { id: task.id, blob };
     } catch (err) {
@@ -98,12 +120,26 @@ async function uploadOne(task: UploadTask, callbacks: UploadCallbacks): Promise<
 // waitForIdle() lets a caller (e.g. "create album") know when everything
 // currently queued has settled; retry() re-runs just the failed ones
 // instead of the whole batch.
+// Slow/fast thresholds in bytes/sec — rough, deliberately conservative
+// equivalents of "2g-ish" and "3g-ish" real-world throughput, since these
+// aren't from a spec (there's nothing to cite for a self-measured signal),
+// just reasonable cutoffs for "clearly struggling" vs "clearly fine".
+const SLOW_THROUGHPUT_BPS = 300 * 1024;
+const OK_THROUGHPUT_BPS = 1024 * 1024;
+const MIN_SAMPLES_BEFORE_TRUSTING = 3;
+const MAX_THROUGHPUT_SAMPLES = 8;
+
 export class UploadManager {
   private queue: UploadTask[] = [];
   private active = 0;
   private results = new Map<string, UploadResult>();
   private idleWaiters: (() => void)[] = [];
   private callbacks: UploadCallbacks;
+  // Real observed bytes/sec from this session's own transfers — works in
+  // every browser (including Safari, which has no Network Information API
+  // at all) since it's measured directly from onUploadProgress, not asked
+  // of the OS.
+  private throughputSamples: number[] = [];
 
   constructor(callbacks: UploadCallbacks = {}) {
     this.callbacks = callbacks;
@@ -119,16 +155,41 @@ export class UploadManager {
     this.enqueue(tasks);
   }
 
+  private recordThroughput(bytesPerSecond: number) {
+    this.throughputSamples.push(bytesPerSecond);
+    if (this.throughputSamples.length > MAX_THROUGHPUT_SAMPLES) {
+      this.throughputSamples.shift();
+    }
+  }
+
+  // Harmonic mean (not arithmetic) — the standard choice for averaging
+  // rates, since it weighs slow samples appropriately instead of letting
+  // one fast burst hide a mostly-slow connection.
+  private getObservedConcurrency(): number | null {
+    if (this.throughputSamples.length < MIN_SAMPLES_BEFORE_TRUSTING) return null;
+    const n = this.throughputSamples.length;
+    const sumOfReciprocals = this.throughputSamples.reduce((acc, rate) => acc + 1 / rate, 0);
+    const harmonicMean = n / sumOfReciprocals;
+
+    if (harmonicMean < SLOW_THROUGHPUT_BPS) return 1;
+    if (harmonicMean < OK_THROUGHPUT_BPS) return 2;
+    return null; // healthy connection — defer to Network Info API / default
+  }
+
   private pump() {
-    // Re-read on every pump (called on each enqueue and each settled
-    // upload) rather than caching once, so a mid-batch network change
-    // (e.g. wifi → cellular) is picked up for the next slot that opens up.
-    const concurrency = getAdaptiveConcurrency();
+    // Real measurements (once we have enough) take priority over the
+    // Network Information API guess, since they're direct and — unlike
+    // that API — available on Safari. Re-read every pump so a mid-batch
+    // network change is picked up for the next slot that opens up.
+    const concurrency = this.getObservedConcurrency() ?? getAdaptiveConcurrency();
     while (this.active < concurrency && this.queue.length > 0) {
       const task = this.queue.shift();
       if (!task) break;
       this.active++;
-      uploadOne(task, this.callbacks).then((result) => {
+      uploadOne(task, {
+        ...this.callbacks,
+        onThroughputSample: (rate) => this.recordThroughput(rate),
+      }).then((result) => {
         this.results.set(task.id, result);
         this.active--;
         this.callbacks.onSettle?.(task.id, result);
