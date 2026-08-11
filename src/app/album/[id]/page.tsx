@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useEffect, use } from "react";
+import { useState, useEffect, useCallback, use } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Download, Archive, Heart, ArrowLeft, Lock,
   ImageIcon, Info, X, ChevronLeft, ChevronRight,
-  CheckCircle2, Calendar, HardDrive, Eye
+  CheckCircle2, Calendar, HardDrive, Eye, Clock
 } from "lucide-react";
 import { cn, formatBytes, formatDate } from "@/lib/utils";
 import { useToast } from "@/components/toast";
@@ -144,15 +144,30 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
     }
   };
 
-  const prevPhoto = () => {
-    if (lightbox === null || !album) return;
-    setLightbox((lightbox - 1 + album.photos.length) % album.photos.length);
-  };
+  const prevPhoto = useCallback(() => {
+    setLightbox((current) => {
+      if (current === null || !album) return current;
+      return (current - 1 + album.photos.length) % album.photos.length;
+    });
+  }, [album]);
 
-  const nextPhoto = () => {
-    if (lightbox === null || !album) return;
-    setLightbox((lightbox + 1) % album.photos.length);
-  };
+  const nextPhoto = useCallback(() => {
+    setLightbox((current) => {
+      if (current === null || !album) return current;
+      return (current + 1) % album.photos.length;
+    });
+  }, [album]);
+
+  useEffect(() => {
+    if (lightbox === null) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setLightbox(null);
+      else if (e.key === "ArrowLeft") prevPhoto();
+      else if (e.key === "ArrowRight") nextPhoto();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [lightbox, prevPhoto, nextPhoto]);
 
   // ── Loading ──
   if (loading) {
@@ -293,11 +308,12 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
             className="border-b border-white/5 overflow-hidden"
           >
             <div className="max-w-6xl mx-auto px-4 py-4">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
                 {[
                   { icon: ImageIcon, label: "Số ảnh", value: `${album.photos.length} ảnh` },
                   { icon: HardDrive, label: "Tổng dung lượng", value: formatBytes(album.totalSize) },
                   { icon: Calendar, label: "Ngày tạo", value: formatDate(new Date(album.createdAt)) },
+                  { icon: Clock, label: "Hết hạn", value: album.expiresAt ? formatDate(new Date(album.expiresAt)) : "Không hết hạn" },
                   { icon: Eye, label: "Chất lượng", value: "Gốc 100%" },
                 ].map((item) => (
                   <div key={item.label} className="glass rounded-xl p-3 flex items-center gap-3">

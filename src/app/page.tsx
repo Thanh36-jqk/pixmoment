@@ -8,7 +8,7 @@ import {
   CheckCircle2, X, FileImage, Loader2, Heart, Smartphone, Download, AlertTriangle
 } from "lucide-react";
 import { cn, formatBytes } from "@/lib/utils";
-import { uploadFilesWithConcurrency } from "@/lib/uploadQueue";
+import { UploadManager, type UploadTask } from "@/lib/uploadQueue";
 import { useToast } from "@/components/toast";
 import { nanoid } from "nanoid";
 
@@ -29,7 +29,6 @@ export default function HomePage() {
   const [password, setPassword] = useState("");
   const [usePassword, setUsePassword] = useState(false);
   const [expiry, setExpiry] = useState("never");
-  const [uploading, setUploading] = useState(false);
   const [albumId, setAlbumId] = useState<string | null>(null);
   const [step, setStep] = useState<"upload" | "uploading" | "done">("upload");
   const [isIOS, setIsIOS] = useState(false);
@@ -58,17 +57,52 @@ export default function HomePage() {
   }, []);
 
   // Warn before an accidental tab close/refresh wipes an in-flight 50-100
-  // photo batch — the browser shows its own generic confirmation text,
-  // custom messages here are ignored by modern browsers.
+  // photo batch. Uploads now start on drop (before "Tạo album" is even
+  // clicked), so this has to watch actual per-file status rather than the
+  // `uploading` flag, which only turns on after that click.
+  const anyFileInFlight = files.some((f) => f.status === "pending" || f.status === "uploading");
   useEffect(() => {
-    if (!uploading) return;
+    if (!anyFileInFlight) return;
     const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = "";
     };
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
-  }, [uploading]);
+  }, [anyFileInFlight]);
+
+  // Files start uploading the instant they're dropped — while the user is
+  // still filling in the album title/password — instead of waiting for the
+  // "Tạo album" click. The manager is created once and fed incrementally;
+  // its onSettle is where a file's final status (done/error) gets written
+  // back, independent of whether "Tạo album" has been pressed yet.
+  const managerRef = useRef<UploadManager | null>(null);
+  const getManager = useCallback(() => {
+    if (!managerRef.current) {
+      managerRef.current = new UploadManager({
+        onStart: (id) => {
+          setFiles((prev) =>
+            prev.map((f) => (f.id === id ? { ...f, status: "uploading", progress: 0, error: undefined } : f))
+          );
+        },
+        onProgress: (id, percentage) => {
+          setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, progress: percentage } : f)));
+        },
+        onSettle: (id, result) => {
+          setFiles((prev) =>
+            prev.map((f) =>
+              f.id === id
+                ? result.blob
+                  ? { ...f, status: "done", progress: 100, url: result.blob.url }
+                  : { ...f, status: "error", error: result.error }
+                : f
+            )
+          );
+        },
+      });
+    }
+    return managerRef.current;
+  }, []);
 
   const onDrop = useCallback((accepted: File[]) => {
     const newItems: FileItem[] = accepted.map((file) => ({
@@ -79,7 +113,15 @@ export default function HomePage() {
       progress: 0,
     }));
     setFiles((prev) => [...prev, ...newItems]);
-  }, []);
+    getManager().enqueue(newItems.map((f): UploadTask => ({ id: f.id, file: f.file })));
+  }, [getManager]);
+
+  const retryFailed = () => {
+    const failed = files.filter((f) => f.status === "error");
+    if (failed.length === 0) return;
+    getManager().retry(failed.map((f): UploadTask => ({ id: f.id, file: f.file })));
+    toast(`Đang thử lại ${failed.length} ảnh...`, "info");
+  };
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -111,49 +153,36 @@ export default function HomePage() {
       toast("Đã bật mật khẩu nhưng chưa nhập — điền mật khẩu hoặc tắt tuỳ chọn này", "error");
       return;
     }
-    setUploading(true);
     setUploadError(null);
     setUploadFailCount(0);
     setStep("uploading");
 
-    const results = await uploadFilesWithConcurrency(
-      files.map((f) => ({ id: f.id, file: f.file })),
-      {
-        onStart: (id) => {
-          setFiles((prev) =>
-            prev.map((f) => (f.id === id ? { ...f, status: "uploading", progress: 0, error: undefined } : f))
-          );
-        },
-        onProgress: (id, percentage) => {
-          setFiles((prev) =>
-            prev.map((f) => (f.id === id ? { ...f, progress: percentage } : f))
-          );
-        },
-      }
-    );
+    // Uploads for these files already started at drop time — this just
+    // waits for whatever's still in flight (or queued) to settle, then
+    // reads the manager's own results rather than React state, since state
+    // updates from onSettle could otherwise race with this closure.
+    const filesSnapshot = files;
+    await getManager().waitForIdle();
+    const results = getManager().getResults(filesSnapshot.map((f) => f.id));
 
     const uploadedPhotos: { name: string; size: number; type: string; url: string }[] = [];
     let failCount = 0;
 
-    setFiles((prev) =>
-      prev.map((f) => {
-        const result = results.find((r) => r.id === f.id);
-        if (result?.blob) {
-          uploadedPhotos.push({
-            name: f.file.name,
-            size: f.file.size,
-            type: f.file.type,
-            url: result.blob.url,
-          });
-          return { ...f, status: "done", progress: 100, url: result.blob.url };
-        }
+    filesSnapshot.forEach((f) => {
+      const result = results.find((r) => r.id === f.id);
+      if (result?.blob) {
+        uploadedPhotos.push({
+          name: f.file.name,
+          size: f.file.size,
+          type: f.file.type,
+          url: result.blob.url,
+        });
+      } else {
         failCount += 1;
-        return { ...f, status: "error", error: result?.error };
-      })
-    );
+      }
+    });
 
     if (uploadedPhotos.length === 0) {
-      setUploading(false);
       setStep("upload");
       const message = `Cả ${failCount} ảnh đều upload thất bại. Kiểm tra mạng rồi bấm tạo album lại để thử lại.`;
       setUploadError(message);
@@ -181,14 +210,12 @@ export default function HomePage() {
         }),
       });
     } catch {
-      setUploading(false);
       setStep("upload");
       toast("Không kết nối được để tạo album, ảnh đã upload xong — thử lại", "error");
       return;
     }
 
     if (!albumRes.ok) {
-      setUploading(false);
       setStep("upload");
       toast("Tạo album thất bại, ảnh đã upload xong — bấm tạo album lại để thử lại", "error");
       return;
@@ -196,7 +223,6 @@ export default function HomePage() {
 
     const album = await albumRes.json();
     setAlbumId(album.id);
-    setUploading(false);
     setStep("done");
     toast("Album đã sẵn sàng!", "success");
   };
@@ -392,13 +418,26 @@ export default function HomePage() {
                       <span className="text-white/50">
                         <span className="text-white font-semibold">{files.length}</span> ảnh ·{" "}
                         <span className="text-white font-semibold">{formatBytes(totalSize)}</span>
+                        {remainingCount > 0 && (
+                          <span className="text-purple-300"> · đang upload {doneCount + errorCount}/{files.length}</span>
+                        )}
                       </span>
-                      <button
-                        onClick={clearAllFiles}
-                        className="text-white/30 hover:text-red-400 transition-colors text-xs"
-                      >
-                        Xóa tất cả
-                      </button>
+                      <div className="flex items-center gap-3">
+                        {errorCount > 0 && (
+                          <button
+                            onClick={retryFailed}
+                            className="text-amber-400/70 hover:text-amber-300 transition-colors text-xs font-medium"
+                          >
+                            Thử lại {errorCount} ảnh lỗi
+                          </button>
+                        )}
+                        <button
+                          onClick={clearAllFiles}
+                          className="text-white/30 hover:text-red-400 transition-colors text-xs"
+                        >
+                          Xóa tất cả
+                        </button>
+                      </div>
                     </div>
 
                     {/* Grid */}
@@ -413,6 +452,16 @@ export default function HomePage() {
                           className="photo-card relative group aspect-square rounded-xl overflow-hidden bg-white/5"
                         >
                           <img src={item.preview} alt={item.file.name} className="w-full h-full object-cover" />
+                          {item.status === "uploading" && (
+                            <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                              <Loader2 className="w-4 h-4 text-white animate-spin" />
+                            </div>
+                          )}
+                          {item.status === "error" && (
+                            <div className="absolute inset-0 bg-red-900/50 flex items-center justify-center">
+                              <AlertTriangle className="w-4 h-4 text-red-200" />
+                            </div>
+                          )}
                           <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
                           <button
                             onClick={() => removeFile(item.id)}

@@ -27,6 +27,7 @@ export interface UploadResult {
 export interface UploadCallbacks {
   onStart?: (id: string) => void;
   onProgress?: (id: string, percentage: number) => void;
+  onSettle?: (id: string, result: UploadResult) => void;
 }
 
 function sleep(ms: number) {
@@ -63,22 +64,58 @@ async function uploadOne(task: UploadTask, callbacks: UploadCallbacks): Promise<
   };
 }
 
-export async function uploadFilesWithConcurrency(
-  tasks: UploadTask[],
-  callbacks: UploadCallbacks = {}
-): Promise<UploadResult[]> {
-  const results: UploadResult[] = new Array(tasks.length);
-  let cursor = 0;
+// A persistent worker pool that files can be fed into at any time (as soon
+// as they're dropped, rather than only when a "start upload" button is
+// pressed), while still capping concurrency across everything in flight.
+// waitForIdle() lets a caller (e.g. "create album") know when everything
+// currently queued has settled; retry() re-runs just the failed ones
+// instead of the whole batch.
+export class UploadManager {
+  private queue: UploadTask[] = [];
+  private active = 0;
+  private results = new Map<string, UploadResult>();
+  private idleWaiters: (() => void)[] = [];
+  private callbacks: UploadCallbacks;
 
-  async function worker() {
-    while (cursor < tasks.length) {
-      const index = cursor++;
-      results[index] = await uploadOne(tasks[index], callbacks);
+  constructor(callbacks: UploadCallbacks = {}) {
+    this.callbacks = callbacks;
+  }
+
+  enqueue(tasks: UploadTask[]) {
+    this.queue.push(...tasks);
+    this.pump();
+  }
+
+  retry(tasks: UploadTask[]) {
+    tasks.forEach((t) => this.results.delete(t.id));
+    this.enqueue(tasks);
+  }
+
+  private pump() {
+    while (this.active < CONCURRENCY && this.queue.length > 0) {
+      const task = this.queue.shift();
+      if (!task) break;
+      this.active++;
+      uploadOne(task, this.callbacks).then((result) => {
+        this.results.set(task.id, result);
+        this.active--;
+        this.callbacks.onSettle?.(task.id, result);
+        this.pump();
+        if (this.active === 0 && this.queue.length === 0) {
+          const waiters = this.idleWaiters;
+          this.idleWaiters = [];
+          waiters.forEach((resolve) => resolve());
+        }
+      });
     }
   }
 
-  const workerCount = Math.min(CONCURRENCY, tasks.length);
-  await Promise.all(Array.from({ length: workerCount }, worker));
+  waitForIdle(): Promise<void> {
+    if (this.active === 0 && this.queue.length === 0) return Promise.resolve();
+    return new Promise((resolve) => this.idleWaiters.push(resolve));
+  }
 
-  return results;
+  getResults(ids: string[]): UploadResult[] {
+    return ids.map((id) => this.results.get(id)).filter((r): r is UploadResult => !!r);
+  }
 }
