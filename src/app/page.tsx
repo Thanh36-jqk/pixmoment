@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, memo } from "react";
 import { useDropzone } from "react-dropzone";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -21,6 +21,65 @@ interface FileItem {
   url?: string;
   error?: string;
 }
+
+interface PhotoGridItemProps {
+  id: string;
+  preview: string;
+  fileName: string;
+  fileSize: number;
+  status: FileItem["status"];
+  index: number;
+  onRemove: (id: string) => void;
+}
+
+// Memoized so a progress-only update to ONE file (which fires several
+// times a second per file while uploading) doesn't force React to
+// reconcile all 100-200 grid tiles — only the tile whose own props
+// actually changed re-renders. Depends on removeFile being a stable
+// (useCallback'd) reference and on `progress` NOT being passed as a prop
+// here, since it's not actually displayed in this tile.
+const PhotoGridItem = memo(function PhotoGridItem({
+  id,
+  preview,
+  fileName,
+  fileSize,
+  status,
+  index,
+  onRemove,
+}: PhotoGridItemProps) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.7 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.7 }}
+      transition={{ delay: Math.min(index * 0.04, 0.5) }}
+      className="photo-card relative group aspect-square rounded-xl overflow-hidden bg-white/5"
+    >
+      <img src={preview} alt={fileName} className="w-full h-full object-cover" />
+      {status === "uploading" && (
+        <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+          <Loader2 className="w-4 h-4 text-white animate-spin" />
+        </div>
+      )}
+      {status === "error" && (
+        <div className="absolute inset-0 bg-red-900/50 flex items-center justify-center">
+          <AlertTriangle className="w-4 h-4 text-red-200" />
+        </div>
+      )}
+      <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent opacity-0 sm:group-hover:opacity-100 transition-opacity" />
+      {/* Always visible on touch devices — :hover doesn't reliably reveal these on mobile */}
+      <button
+        onClick={() => onRemove(id)}
+        className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/70 flex items-center justify-center opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+      >
+        <X className="w-3.5 h-3.5 text-white" />
+      </button>
+      <div className="absolute bottom-1 left-1 right-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+        <p className="text-white text-[8px] truncate bg-black/50 rounded px-1">{formatBytes(fileSize)}</p>
+      </div>
+    </motion.div>
+  );
+});
 
 export default function HomePage() {
   const toast = useToast();
@@ -169,13 +228,16 @@ export default function HomePage() {
     multiple: true,
   });
 
-  const removeFile = (id: string) => {
+  // Stable reference (useCallback) so the memoized grid items below don't
+  // see a "changed" prop on every render just because this function was
+  // recreated — that would defeat the memoization entirely.
+  const removeFile = useCallback((id: string) => {
     setFiles((prev) => {
       const target = prev.find((f) => f.id === id);
       if (target) URL.revokeObjectURL(target.preview);
       return prev.filter((f) => f.id !== id);
     });
-  };
+  }, []);
 
   const clearAllFiles = () => {
     setFiles((prev) => {
@@ -480,37 +542,16 @@ export default function HomePage() {
                     {/* Grid */}
                     <div className="grid grid-cols-4 sm:grid-cols-6 gap-2">
                       {files.map((item, i) => (
-                        <motion.div
+                        <PhotoGridItem
                           key={item.id}
-                          initial={{ opacity: 0, scale: 0.7 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          exit={{ opacity: 0, scale: 0.7 }}
-                          transition={{ delay: Math.min(i * 0.04, 0.5) }}
-                          className="photo-card relative group aspect-square rounded-xl overflow-hidden bg-white/5"
-                        >
-                          <img src={item.preview} alt={item.file.name} className="w-full h-full object-cover" />
-                          {item.status === "uploading" && (
-                            <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                              <Loader2 className="w-4 h-4 text-white animate-spin" />
-                            </div>
-                          )}
-                          {item.status === "error" && (
-                            <div className="absolute inset-0 bg-red-900/50 flex items-center justify-center">
-                              <AlertTriangle className="w-4 h-4 text-red-200" />
-                            </div>
-                          )}
-                          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent opacity-0 sm:group-hover:opacity-100 transition-opacity" />
-                          {/* Always visible on touch devices — :hover doesn't reliably reveal these on mobile */}
-                          <button
-                            onClick={() => removeFile(item.id)}
-                            className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/70 flex items-center justify-center opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
-                          >
-                            <X className="w-3.5 h-3.5 text-white" />
-                          </button>
-                          <div className="absolute bottom-1 left-1 right-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-                            <p className="text-white text-[8px] truncate bg-black/50 rounded px-1">{formatBytes(item.file.size)}</p>
-                          </div>
-                        </motion.div>
+                          id={item.id}
+                          preview={item.preview}
+                          fileName={item.file.name}
+                          fileSize={item.file.size}
+                          status={item.status}
+                          index={i}
+                          onRemove={removeFile}
+                        />
                       ))}
 
                       {/* Add more button */}
