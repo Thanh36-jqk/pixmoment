@@ -7,7 +7,7 @@ import {
   Upload, ImageIcon, Sparkles, Lock, Clock, ArrowRight,
   CheckCircle2, X, FileImage, Loader2, Heart, Smartphone, AlertTriangle
 } from "lucide-react";
-import { cn, formatBytes } from "@/lib/utils";
+import { cn, formatBytes, createThumbnail } from "@/lib/utils";
 import { UploadManager, type UploadTask } from "@/lib/uploadQueue";
 import { useToast } from "@/components/toast";
 import { nanoid } from "nanoid";
@@ -55,7 +55,9 @@ const PhotoGridItem = memo(function PhotoGridItem({
       transition={{ delay: Math.min(index * 0.04, 0.5) }}
       className="photo-card relative group aspect-square rounded-xl overflow-hidden bg-white/5"
     >
-      <img src={preview} alt={fileName} className="w-full h-full object-cover" />
+      {preview && (
+        <img src={preview} alt={fileName} loading="lazy" decoding="async" className="w-full h-full object-cover" />
+      )}
       {status === "uploading" && (
         <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
           <Loader2 className="w-4 h-4 text-white animate-spin" />
@@ -97,7 +99,11 @@ interface UploadingRowProps {
 const UploadingRow = memo(function UploadingRow({ preview, fileName, fileSize, status, progress }: UploadingRowProps) {
   return (
     <div className="glass rounded-xl p-3.5 flex items-center gap-3">
-      <img src={preview} alt="" className="w-10 h-10 rounded-lg object-cover shrink-0" />
+      {preview ? (
+        <img src={preview} alt="" loading="lazy" decoding="async" className="w-10 h-10 rounded-lg object-cover shrink-0" />
+      ) : (
+        <div className="w-10 h-10 rounded-lg bg-white/5 shrink-0" />
+      )}
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium truncate text-white/80">{fileName}</p>
         <p className="text-xs text-white/30">{formatBytes(fileSize)}</p>
@@ -120,6 +126,122 @@ const UploadingRow = memo(function UploadingRow({ preview, fileName, fileSize, s
   );
 });
 
+interface VirtualRange {
+  start: number;
+  end: number;
+}
+
+// A `useRef` object's identity never changes even after the DOM node it
+// points at mounts, so effects keyed on the ref object itself (rather than
+// its `.current`) never re-run when that node appears — exactly what
+// happens here, since the grid/list only mount once `files.length > 0`.
+// A callback ref routed through state fixes it: `element` is a real value
+// that changes (and re-triggers dependent effects) at the moment the node
+// actually mounts.
+function useTrackedElement<T extends HTMLElement>() {
+  const [element, setElement] = useState<T | null>(null);
+  const ref = useCallback((node: T | null) => setElement(node), []);
+  return [element, ref] as const;
+}
+
+// Downscaled thumbnails fix per-image decode cost, but a batch of several
+// hundred still means several hundred decoded <img> buffers alive in the
+// DOM at once (each ~300-400KB for a 320px thumbnail) — real memory on a
+// constrained device. This renders only rows near the viewport (+ buffer);
+// everything else becomes an empty same-size placeholder so scroll height
+// and position don't jump as the range shifts. `container` must be a
+// distinct element from `scrollContainer` (an ancestor holding the items,
+// not the scrollable element itself) — the bounding-rect math needs two
+// different reference points to work out the scroll offset.
+function useVirtualRange({
+  container,
+  itemCount,
+  columns,
+  rowHeightPx,
+  scrollContainer = null,
+  bufferRows = 3,
+}: {
+  container: HTMLElement | null;
+  itemCount: number;
+  columns: number;
+  rowHeightPx: number;
+  scrollContainer?: HTMLElement | null;
+  bufferRows?: number;
+}): VirtualRange {
+  const [range, setRange] = useState<VirtualRange>({ start: 0, end: itemCount });
+
+  useEffect(() => {
+    const totalRows = Math.ceil(itemCount / columns);
+
+    const compute = () => {
+      if (rowHeightPx <= 0 || columns <= 0 || !container) {
+        setRange({ start: 0, end: itemCount });
+        return;
+      }
+      const containerTop = container.getBoundingClientRect().top;
+      let viewTop: number;
+      let viewHeight: number;
+      let offsetTop: number;
+      if (scrollContainer) {
+        viewTop = scrollContainer.scrollTop;
+        viewHeight = scrollContainer.clientHeight;
+        offsetTop = containerTop - scrollContainer.getBoundingClientRect().top + scrollContainer.scrollTop;
+      } else {
+        viewTop = window.scrollY;
+        viewHeight = window.innerHeight;
+        offsetTop = containerTop + window.scrollY;
+      }
+      const relativeTop = viewTop - offsetTop;
+      const firstRow = Math.max(0, Math.floor(relativeTop / rowHeightPx) - bufferRows);
+      const lastRow = Math.min(totalRows, Math.ceil((relativeTop + viewHeight) / rowHeightPx) + bufferRows);
+      setRange({ start: firstRow * columns, end: Math.min(itemCount, lastRow * columns) });
+    };
+
+    compute();
+    if (rowHeightPx <= 0 || columns <= 0 || !container) return;
+
+    const scrollTarget = scrollContainer ?? window;
+    scrollTarget.addEventListener("scroll", compute, { passive: true });
+    window.addEventListener("resize", compute);
+    const resizeObserver = new ResizeObserver(compute);
+    resizeObserver.observe(container);
+
+    return () => {
+      scrollTarget.removeEventListener("scroll", compute);
+      window.removeEventListener("resize", compute);
+      resizeObserver.disconnect();
+    };
+  }, [container, itemCount, columns, rowHeightPx, bufferRows, scrollContainer]);
+
+  return range;
+}
+
+// Grid columns switch at Tailwind's `sm` breakpoint (grid-cols-4 sm:grid-cols-6).
+function useResponsiveColumns(mobileColumns: number, desktopColumns: number) {
+  const [columns, setColumns] = useState(mobileColumns);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 640px)");
+    const update = () => setColumns(mq.matches ? desktopColumns : mobileColumns);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, [mobileColumns, desktopColumns]);
+  return columns;
+}
+
+function useElementWidth(element: HTMLElement | null) {
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const measure = () => setWidth(element ? element.clientWidth : 0);
+    measure();
+    if (!element) return;
+    const resizeObserver = new ResizeObserver(measure);
+    resizeObserver.observe(element);
+    return () => resizeObserver.disconnect();
+  }, [element]);
+  return width;
+}
+
 export default function HomePage() {
   const toast = useToast();
   const [files, setFiles] = useState<FileItem[]>([]);
@@ -132,6 +254,36 @@ export default function HomePage() {
   const [isIOS, setIsIOS] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadFailCount, setUploadFailCount] = useState(0);
+
+  // Must stay in sync with the grid's `gap-2` / `grid-cols-4 sm:grid-cols-6`
+  // classes below — this math has no way to read Tailwind's computed gap
+  // itself, so a class change here needs a matching constant change.
+  const GRID_GAP_PX = 8;
+  const [gridEl, gridRef] = useTrackedElement<HTMLDivElement>();
+  const gridColumns = useResponsiveColumns(4, 6);
+  const gridWidth = useElementWidth(gridEl);
+  const gridTileSize = gridWidth > 0 ? (gridWidth - GRID_GAP_PX * (gridColumns - 1)) / gridColumns : 0;
+  const gridRange = useVirtualRange({
+    container: gridEl,
+    itemCount: files.length,
+    columns: gridColumns,
+    rowHeightPx: gridTileSize > 0 ? gridTileSize + GRID_GAP_PX : 0,
+  });
+
+  // Row height varies a little (progress bar only shows while uploading) —
+  // approximate and generously buffered, since this only gates which rows
+  // mount a real <img> vs. a placeholder, not layout.
+  const UPLOADING_ROW_HEIGHT_PX = 76;
+  const [uploadingScrollEl, uploadingScrollRef] = useTrackedElement<HTMLDivElement>();
+  const [uploadingListEl, uploadingListRef] = useTrackedElement<HTMLDivElement>();
+  const uploadingRange = useVirtualRange({
+    container: uploadingListEl,
+    itemCount: files.length,
+    columns: 1,
+    rowHeightPx: UPLOADING_ROW_HEIGHT_PX,
+    scrollContainer: uploadingScrollEl,
+    bufferRows: 4,
+  });
 
   useEffect(() => {
     const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as unknown as Record<string,unknown>).MSStream;
@@ -238,17 +390,35 @@ export default function HomePage() {
     return managerRef.current;
   }, []);
 
+  // Thumbnails are decoded one at a time (well, THUMBNAIL_CONCURRENCY at a
+  // time) instead of all at once — decoding 50-100 full-res originals in
+  // parallel would recreate the exact memory spike thumbnails are meant to
+  // avoid, just moved from <img> tags into createImageBitmap calls.
+  const THUMBNAIL_CONCURRENCY = 3;
+  const generateThumbnails = useCallback((items: FileItem[]) => {
+    let next = 0;
+    const worker = async () => {
+      while (next < items.length) {
+        const item = items[next++];
+        const preview = await createThumbnail(item.file);
+        setFiles((prev) => prev.map((f) => (f.id === item.id ? { ...f, preview } : f)));
+      }
+    };
+    for (let i = 0; i < THUMBNAIL_CONCURRENCY; i++) worker();
+  }, []);
+
   const onDrop = useCallback((accepted: File[]) => {
     const newItems: FileItem[] = accepted.map((file) => ({
       id: nanoid(),
       file,
-      preview: URL.createObjectURL(file),
+      preview: "",
       status: "pending",
       progress: 0,
     }));
     setFiles((prev) => [...prev, ...newItems]);
     getManager().enqueue(newItems.map((f): UploadTask => ({ id: f.id, file: f.file })));
-  }, [getManager]);
+    generateThumbnails(newItems);
+  }, [getManager, generateThumbnails]);
 
   const retryFailed = () => {
     const failed = files.filter((f) => f.status === "error");
@@ -572,19 +742,23 @@ export default function HomePage() {
                     </div>
 
                     {/* Grid */}
-                    <div className="grid grid-cols-4 sm:grid-cols-6 gap-2">
-                      {files.map((item, i) => (
-                        <PhotoGridItem
-                          key={item.id}
-                          id={item.id}
-                          preview={item.preview}
-                          fileName={item.file.name}
-                          fileSize={item.file.size}
-                          status={item.status}
-                          index={i}
-                          onRemove={removeFile}
-                        />
-                      ))}
+                    <div ref={gridRef} className="grid grid-cols-4 sm:grid-cols-6 gap-2">
+                      {files.map((item, i) =>
+                        i >= gridRange.start && i < gridRange.end ? (
+                          <PhotoGridItem
+                            key={item.id}
+                            id={item.id}
+                            preview={item.preview}
+                            fileName={item.file.name}
+                            fileSize={item.file.size}
+                            status={item.status}
+                            index={i}
+                            onRemove={removeFile}
+                          />
+                        ) : (
+                          <div key={item.id} className="aspect-square rounded-xl bg-white/5" />
+                        )
+                      )}
 
                       {/* Add more button */}
                       <div {...getRootProps()} className="aspect-square rounded-xl border-2 border-dashed border-white/10 hover:border-purple-400/40 flex items-center justify-center cursor-pointer transition-colors">
@@ -727,17 +901,23 @@ export default function HomePage() {
                 </div>
               </div>
 
-              <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
-                {files.map((item) => (
-                  <UploadingRow
-                    key={item.id}
-                    preview={item.preview}
-                    fileName={item.file.name}
-                    fileSize={item.file.size}
-                    status={item.status}
-                    progress={item.progress}
-                  />
-                ))}
+              <div ref={uploadingScrollRef} className="max-h-80 overflow-y-auto pr-1">
+                <div ref={uploadingListRef} className="space-y-2">
+                  {files.map((item, i) =>
+                    i >= uploadingRange.start && i < uploadingRange.end ? (
+                      <UploadingRow
+                        key={item.id}
+                        preview={item.preview}
+                        fileName={item.file.name}
+                        fileSize={item.file.size}
+                        status={item.status}
+                        progress={item.progress}
+                      />
+                    ) : (
+                      <div key={item.id} style={{ height: UPLOADING_ROW_HEIGHT_PX - 8 }} />
+                    )
+                  )}
+                </div>
               </div>
             </motion.div>
           )}
