@@ -27,6 +27,23 @@ const THUMBNAIL_MAX_DIMENSION = 320;
 // resizeWidth/resizeHeight is set so the browser preserves aspect ratio.
 const DECODE_RESIZE_CAP = 1024;
 
+// Guards against a decode attempt that never settles. Not expected in
+// practice (browsers reject unsupported formats like HEIC on Chrome/Android
+// fairly quickly), but a stuck promise here would stall its worker in the
+// concurrency-limited pool in page.tsx forever, silently blocking every
+// later file queued behind it — worse than a slow failure.
+const DECODE_TIMEOUT_MS = 5000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("decode timed out")), ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (err) => { clearTimeout(timer); reject(err); }
+    );
+  });
+}
+
 function scaledDimensions(width: number, height: number, maxDimension: number) {
   const scale = Math.min(1, maxDimension / Math.max(width, height));
   return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
@@ -70,20 +87,27 @@ async function createThumbnailViaImgElement(file: File): Promise<string> {
 
 export async function createThumbnail(file: File): Promise<string> {
   try {
-    const bitmap = await createImageBitmap(file, { resizeWidth: DECODE_RESIZE_CAP, resizeQuality: "medium" });
+    const bitmap = await withTimeout(
+      createImageBitmap(file, { resizeWidth: DECODE_RESIZE_CAP, resizeQuality: "medium" }),
+      DECODE_TIMEOUT_MS
+    );
     try {
       return await bitmapToThumbnailUrl(bitmap, bitmap.width, bitmap.height);
     } finally {
       bitmap.close();
     }
   } catch {
+    // HEIC — the default format for every iPhone photo — has no decode
+    // support at all in Chrome/Edge/Android (createImageBitmap nor <img>);
+    // only Safari's OS-level codec handles it. That makes this the common
+    // case for iPhone uploads viewed outside Safari, not a rare edge case.
     try {
-      return await createThumbnailViaImgElement(file);
+      return await withTimeout(createThumbnailViaImgElement(file), DECODE_TIMEOUT_MS);
     } catch {
-      // Format neither API can decode (rare RAW variants, corrupt files) —
-      // no preview rather than falling back to the original full-res blob
+      // No preview rather than falling back to the original full-res blob
       // URL, which is exactly the crash-prone path this function exists to
-      // avoid.
+      // avoid. The upload itself is unaffected — it always sends the
+      // original file regardless of whether a thumbnail could be made.
       return "";
     }
   }

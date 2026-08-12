@@ -55,8 +55,16 @@ const PhotoGridItem = memo(function PhotoGridItem({
       transition={{ delay: Math.min(index * 0.04, 0.5) }}
       className="photo-card relative group aspect-square rounded-xl overflow-hidden bg-white/5"
     >
-      {preview && (
+      {preview ? (
         <img src={preview} alt={fileName} loading="lazy" decoding="async" className="w-full h-full object-cover" />
+      ) : (
+        // No client-side preview available (e.g. HEIC on Chrome/Android,
+        // which has no decoder for it) — still show something rather than
+        // an empty tile, which otherwise reads as broken/stuck. The file
+        // itself uploads fine regardless; only the thumbnail is missing.
+        <div className="w-full h-full flex items-center justify-center">
+          <FileImage className="w-5 h-5 text-white/20" />
+        </div>
       )}
       {status === "uploading" && (
         <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
@@ -102,7 +110,9 @@ const UploadingRow = memo(function UploadingRow({ preview, fileName, fileSize, s
       {preview ? (
         <img src={preview} alt="" loading="lazy" decoding="async" className="w-10 h-10 rounded-lg object-cover shrink-0" />
       ) : (
-        <div className="w-10 h-10 rounded-lg bg-white/5 shrink-0" />
+        <div className="w-10 h-10 rounded-lg bg-white/5 shrink-0 flex items-center justify-center">
+          <FileImage className="w-4 h-4 text-white/20" />
+        </div>
       )}
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium truncate text-white/80">{fileName}</p>
