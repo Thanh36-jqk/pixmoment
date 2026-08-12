@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { nanoid } from "nanoid";
 import { albumCreateRatelimit, getClientIp, isRateLimited } from "@/lib/rateLimit";
 import { hashPassword } from "@/lib/password";
+import { PRIVATE_BLOB_TOKEN } from "@/lib/privateBlob";
 import type { AlbumSummary } from "@/types";
 
 export const runtime = "nodejs";
@@ -32,7 +33,7 @@ async function recordAlbumForOwner(
   const path = `owners/${ownerId}.json`;
   let history: AlbumSummary[] = [];
   try {
-    const existing = await get(path, { access: "private" });
+    const existing = await get(path, { access: "private", token: PRIVATE_BLOB_TOKEN });
     if (existing && existing.statusCode === 200) {
       const parsed = JSON.parse(await new Response(existing.stream).text());
       if (Array.isArray(parsed)) history = parsed;
@@ -46,6 +47,7 @@ async function recordAlbumForOwner(
     access: "private",
     contentType: "application/json",
     allowOverwrite: true,
+    token: PRIVATE_BLOB_TOKEN,
   });
 }
 
@@ -79,6 +81,7 @@ export async function POST(req: NextRequest) {
     access: "private",
     contentType: "application/json",
     allowOverwrite: true,
+    token: PRIVATE_BLOB_TOKEN,
   });
 
   if (ownerId) {

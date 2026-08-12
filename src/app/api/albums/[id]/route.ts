@@ -1,6 +1,7 @@
 import { get } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
 import { verifyPassword } from "@/lib/password";
+import { PRIVATE_BLOB_TOKEN } from "@/lib/privateBlob";
 
 export const runtime = "nodejs";
 
@@ -13,7 +14,7 @@ const VALID_ID = /^[A-Za-z0-9_-]{1,32}$/;
 // password check before by hitting the storage URL directly.
 async function readAlbum(id: string) {
   if (!VALID_ID.test(id)) return null;
-  const result = await get(`albums/${id}.json`, { access: "private" });
+  const result = await get(`albums/${id}.json`, { access: "private", token: PRIVATE_BLOB_TOKEN });
   if (!result || result.statusCode !== 200) return null;
   const text = await new Response(result.stream).text();
   return JSON.parse(text);

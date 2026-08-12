@@ -1,5 +1,6 @@
 import { get } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
+import { PRIVATE_BLOB_TOKEN } from "@/lib/privateBlob";
 import type { AlbumSummary } from "@/types";
 
 export const runtime = "nodejs";
@@ -14,7 +15,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const result = await get(`owners/${ownerId}.json`, { access: "private" });
+    const result = await get(`owners/${ownerId}.json`, { access: "private", token: PRIVATE_BLOB_TOKEN });
     if (!result || result.statusCode !== 200) {
       return NextResponse.json({ albums: [] });
     }
