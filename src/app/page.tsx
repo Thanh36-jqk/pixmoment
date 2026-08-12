@@ -262,7 +262,7 @@ export default function HomePage() {
     onDropRejected: (rejections) => {
       toast(`${rejections.length} file bị bỏ qua vì không phải ảnh`, "error");
     },
-    accept: { "image/*": [] },
+    accept: { "image/*": [], "image/heic": [], "image/heif": [] },
     multiple: true,
   });
 
