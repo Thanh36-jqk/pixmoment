@@ -1,13 +1,15 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef, memo } from "react";
 import { useDropzone } from "react-dropzone";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Upload, ImageIcon, Sparkles, Lock, Clock, ArrowRight,
-  CheckCircle2, X, FileImage, Loader2, Heart, Smartphone, Download
+  CheckCircle2, X, FileImage, Loader2, Heart, Smartphone, AlertTriangle
 } from "lucide-react";
 import { cn, formatBytes } from "@/lib/utils";
+import { UploadManager, type UploadTask } from "@/lib/uploadQueue";
+import { useToast } from "@/components/toast";
 import { nanoid } from "nanoid";
 
 interface FileItem {
@@ -17,25 +19,224 @@ interface FileItem {
   status: "pending" | "uploading" | "done" | "error";
   progress: number;
   url?: string;
+  error?: string;
 }
 
+interface PhotoGridItemProps {
+  id: string;
+  preview: string;
+  fileName: string;
+  fileSize: number;
+  status: FileItem["status"];
+  index: number;
+  onRemove: (id: string) => void;
+}
+
+// Memoized so a progress-only update to ONE file (which fires several
+// times a second per file while uploading) doesn't force React to
+// reconcile all 100-200 grid tiles — only the tile whose own props
+// actually changed re-renders. Depends on removeFile being a stable
+// (useCallback'd) reference and on `progress` NOT being passed as a prop
+// here, since it's not actually displayed in this tile.
+const PhotoGridItem = memo(function PhotoGridItem({
+  id,
+  preview,
+  fileName,
+  fileSize,
+  status,
+  index,
+  onRemove,
+}: PhotoGridItemProps) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.7 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.7 }}
+      transition={{ delay: Math.min(index * 0.04, 0.5) }}
+      className="photo-card relative group aspect-square rounded-xl overflow-hidden bg-white/5"
+    >
+      <img src={preview} alt={fileName} className="w-full h-full object-cover" />
+      {status === "uploading" && (
+        <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+          <Loader2 className="w-4 h-4 text-white animate-spin" />
+        </div>
+      )}
+      {status === "error" && (
+        <div className="absolute inset-0 bg-red-900/50 flex items-center justify-center">
+          <AlertTriangle className="w-4 h-4 text-red-200" />
+        </div>
+      )}
+      <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent opacity-0 sm:group-hover:opacity-100 transition-opacity" />
+      {/* Always visible on touch devices — :hover doesn't reliably reveal these on mobile */}
+      <button
+        onClick={() => onRemove(id)}
+        className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/70 flex items-center justify-center opacity-100 sm:opacity-0 sm:group-hover:opacity-100 pointer-events-auto sm:pointer-events-none sm:group-hover:pointer-events-auto transition-opacity"
+      >
+        <X className="w-3.5 h-3.5 text-white" />
+      </button>
+      <div className="absolute bottom-1 left-1 right-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+        <p className="text-white text-[8px] truncate bg-black/50 rounded px-1">{formatBytes(fileSize)}</p>
+      </div>
+    </motion.div>
+  );
+});
+
+interface UploadingRowProps {
+  preview: string;
+  fileName: string;
+  fileSize: number;
+  status: FileItem["status"];
+  progress: number;
+}
+
+// Same reasoning as PhotoGridItem above — this list is visible while
+// uploads are still settling (e.g. the user clicked "Tạo album" before a
+// large batch finished), and each row's own progress ticks several times
+// a second. Memoized so only the row whose progress actually changed
+// re-renders instead of all 100-200.
+const UploadingRow = memo(function UploadingRow({ preview, fileName, fileSize, status, progress }: UploadingRowProps) {
+  return (
+    <div className="glass rounded-xl p-3.5 flex items-center gap-3">
+      <img src={preview} alt="" className="w-10 h-10 rounded-lg object-cover shrink-0" />
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium truncate text-white/80">{fileName}</p>
+        <p className="text-xs text-white/30">{formatBytes(fileSize)}</p>
+        {status === "uploading" && (
+          <div className="mt-1.5 h-1 bg-white/10 rounded-full overflow-hidden">
+            <motion.div
+              animate={{ width: `${progress}%` }}
+              className="h-full progress-shimmer rounded-full"
+            />
+          </div>
+        )}
+      </div>
+      <div className="shrink-0">
+        {status === "done" && <CheckCircle2 className="w-5 h-5 text-green-400" />}
+        {status === "uploading" && <Loader2 className="w-5 h-5 text-purple-400 animate-spin" />}
+        {status === "error" && <X className="w-5 h-5 text-red-400" />}
+        {status === "pending" && <div className="w-4 h-4 rounded-full border-2 border-white/20" />}
+      </div>
+    </div>
+  );
+});
+
 export default function HomePage() {
+  const toast = useToast();
   const [files, setFiles] = useState<FileItem[]>([]);
   const [title, setTitle] = useState("");
   const [password, setPassword] = useState("");
   const [usePassword, setUsePassword] = useState(false);
   const [expiry, setExpiry] = useState("never");
-  const [uploading, setUploading] = useState(false);
   const [albumId, setAlbumId] = useState<string | null>(null);
   const [step, setStep] = useState<"upload" | "uploading" | "done">("upload");
   const [isIOS, setIsIOS] = useState(false);
-  const [showIOSGuide, setShowIOSGuide] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadFailCount, setUploadFailCount] = useState(0);
 
   useEffect(() => {
     const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as unknown as Record<string,unknown>).MSStream;
     setIsIOS(ios);
   }, []);
   const [copied, setCopied] = useState(false);
+
+  // Keep a live ref so the unmount cleanup below can revoke whatever
+  // previews exist at that point, without re-registering the effect on
+  // every files change.
+  const filesRef = useRef<FileItem[]>([]);
+  useEffect(() => {
+    filesRef.current = files;
+  }, [files]);
+
+  useEffect(() => {
+    return () => {
+      filesRef.current.forEach((f) => URL.revokeObjectURL(f.preview));
+    };
+  }, []);
+
+  // Warn before an accidental tab close/refresh wipes an in-flight 50-100
+  // photo batch. Uploads now start on drop (before "Tạo album" is even
+  // clicked), so this has to watch actual per-file status rather than the
+  // `uploading` flag, which only turns on after that click.
+  const anyFileInFlight = files.some((f) => f.status === "pending" || f.status === "uploading");
+  useEffect(() => {
+    if (!anyFileInFlight) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [anyFileInFlight]);
+
+  // Keep the screen on while uploading — mobile OSes dim/lock the screen
+  // after a short idle, and a locked screen is a common way the browser
+  // ends up suspending the tab mid-batch. Not a fix for switching away to
+  // another app, just for the far more common "phone sits there waiting"
+  // case. Feature-detected — unsupported browsers just skip this quietly.
+  useEffect(() => {
+    if (!anyFileInFlight || !("wakeLock" in navigator)) return;
+
+    let cancelled = false;
+    let lock: WakeLockSentinel | null = null;
+
+    const requestLock = async () => {
+      try {
+        const sentinel = await navigator.wakeLock.request("screen");
+        if (cancelled) {
+          sentinel.release().catch(() => {});
+          return;
+        }
+        lock = sentinel;
+      } catch {
+        // Denied or not allowed in this context (e.g. backgrounded) — fine, best-effort only.
+      }
+    };
+    requestLock();
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible" && !lock) requestLock();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", handleVisibility);
+      lock?.release().catch(() => {});
+    };
+  }, [anyFileInFlight]);
+
+  // Files start uploading the instant they're dropped — while the user is
+  // still filling in the album title/password — instead of waiting for the
+  // "Tạo album" click. The manager is created once and fed incrementally;
+  // its onSettle is where a file's final status (done/error) gets written
+  // back, independent of whether "Tạo album" has been pressed yet.
+  const managerRef = useRef<UploadManager | null>(null);
+  const getManager = useCallback(() => {
+    if (!managerRef.current) {
+      managerRef.current = new UploadManager({
+        onStart: (id) => {
+          setFiles((prev) =>
+            prev.map((f) => (f.id === id ? { ...f, status: "uploading", progress: 0, error: undefined } : f))
+          );
+        },
+        onProgress: (id, percentage) => {
+          setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, progress: percentage } : f)));
+        },
+        onSettle: (id, result) => {
+          setFiles((prev) =>
+            prev.map((f) =>
+              f.id === id
+                ? result.blob
+                  ? { ...f, status: "done", progress: 100, url: result.blob.url }
+                  : { ...f, status: "error", error: result.error }
+                : f
+            )
+          );
+        },
+      });
+    }
+    return managerRef.current;
+  }, []);
 
   const onDrop = useCallback((accepted: File[]) => {
     const newItems: FileItem[] = accepted.map((file) => ({
@@ -46,102 +247,142 @@ export default function HomePage() {
       progress: 0,
     }));
     setFiles((prev) => [...prev, ...newItems]);
-  }, []);
+    getManager().enqueue(newItems.map((f): UploadTask => ({ id: f.id, file: f.file })));
+  }, [getManager]);
+
+  const retryFailed = () => {
+    const failed = files.filter((f) => f.status === "error");
+    if (failed.length === 0) return;
+    getManager().retry(failed.map((f): UploadTask => ({ id: f.id, file: f.file })));
+    toast(`Đang thử lại ${failed.length} ảnh...`, "info");
+  };
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
+    onDropRejected: (rejections) => {
+      toast(`${rejections.length} file bị bỏ qua vì không phải ảnh`, "error");
+    },
     accept: { "image/*": [] },
     multiple: true,
   });
 
-  const removeFile = (id: string) => {
-    setFiles((prev) => prev.filter((f) => f.id !== id));
+  // Stable reference (useCallback) so the memoized grid items below don't
+  // see a "changed" prop on every render just because this function was
+  // recreated — that would defeat the memoization entirely.
+  const removeFile = useCallback((id: string) => {
+    setFiles((prev) => {
+      const target = prev.find((f) => f.id === id);
+      if (target) URL.revokeObjectURL(target.preview);
+      return prev.filter((f) => f.id !== id);
+    });
+  }, []);
+
+  const clearAllFiles = () => {
+    setFiles((prev) => {
+      prev.forEach((f) => URL.revokeObjectURL(f.preview));
+      return [];
+    });
   };
 
   const handleUpload = async () => {
     if (files.length === 0) return;
-    setUploading(true);
+    if (usePassword && !password.trim()) {
+      toast("Đã bật mật khẩu nhưng chưa nhập — điền mật khẩu hoặc tắt tuỳ chọn này", "error");
+      return;
+    }
+    setUploadError(null);
+    setUploadFailCount(0);
     setStep("uploading");
 
+    // Uploads for these files already started at drop time — this just
+    // waits for whatever's still in flight (or queued) to settle, then
+    // reads the manager's own results rather than React state, since state
+    // updates from onSettle could otherwise race with this closure.
+    const filesSnapshot = files;
+    await getManager().waitForIdle();
+    const results = getManager().getResults(filesSnapshot.map((f) => f.id));
+
     const uploadedPhotos: { name: string; size: number; type: string; url: string }[] = [];
+    let failCount = 0;
 
-    for (const item of files) {
-      setFiles((prev) =>
-        prev.map((f) => f.id === item.id ? { ...f, status: "uploading" } : f)
-      );
-
-      try {
-        const formData = new FormData();
-        formData.append("file", item.file);
-
-        const interval = setInterval(() => {
-          setFiles((prev) =>
-            prev.map((f) =>
-              f.id === item.id && f.progress < 85
-                ? { ...f, progress: f.progress + 15 }
-                : f
-            )
-          );
-        }, 300);
-
-        const res = await fetch("/api/upload", {
-          method: "POST",
-          body: formData,
-        });
-
-        clearInterval(interval);
-
-        if (!res.ok) throw new Error("Upload failed");
-        const data = await res.json();
-
+    filesSnapshot.forEach((f) => {
+      const result = results.find((r) => r.id === f.id);
+      if (result?.blob) {
         uploadedPhotos.push({
-          name: item.file.name,
-          size: item.file.size,
-          type: item.file.type,
-          url: data.url,
+          name: f.file.name,
+          size: f.file.size,
+          type: f.file.type,
+          url: result.blob.url,
         });
-
-        setFiles((prev) =>
-          prev.map((f) =>
-            f.id === item.id ? { ...f, status: "done", progress: 100, url: data.url } : f
-          )
-        );
-      } catch {
-        setFiles((prev) =>
-          prev.map((f) => f.id === item.id ? { ...f, status: "error" } : f)
-        );
+      } else {
+        failCount += 1;
       }
+    });
+
+    if (uploadedPhotos.length === 0) {
+      setStep("upload");
+      const message = `Cả ${failCount} ảnh đều upload thất bại. Kiểm tra mạng rồi bấm tạo album lại để thử lại.`;
+      setUploadError(message);
+      toast(message, "error");
+      return;
     }
 
-    const albumRes = await fetch("/api/albums", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title: title || "Album của chúng mình",
-        photos: uploadedPhotos,
-        password: usePassword ? password : undefined,
-        expiresIn: expiry,
-      }),
-    });
+    setUploadFailCount(failCount);
+    if (failCount > 0) {
+      toast(`${uploadedPhotos.length} ảnh xong, ${failCount} ảnh lỗi`, "error");
+    } else {
+      toast(`${uploadedPhotos.length} ảnh upload thành công`, "success");
+    }
+
+    let albumRes: Response;
+    try {
+      albumRes = await fetch("/api/albums", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: title || "Album của chúng mình",
+          photos: uploadedPhotos,
+          password: usePassword ? password : undefined,
+          expiresIn: expiry,
+        }),
+      });
+    } catch {
+      setStep("upload");
+      toast("Không kết nối được để tạo album, ảnh đã upload xong — thử lại", "error");
+      return;
+    }
+
+    if (!albumRes.ok) {
+      setStep("upload");
+      toast("Tạo album thất bại, ảnh đã upload xong — bấm tạo album lại để thử lại", "error");
+      return;
+    }
 
     const album = await albumRes.json();
     setAlbumId(album.id);
-    setUploading(false);
     setStep("done");
+    toast("Album đã sẵn sàng!", "success");
   };
 
   const shareUrl = typeof window !== "undefined" && albumId
     ? `${window.location.origin}/album/${albumId}`
     : "";
 
-  const copyLink = () => {
-    navigator.clipboard.writeText(shareUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      toast("Đã copy link", "success");
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast("Không copy được link, thử bấm giữ để copy thủ công", "error");
+    }
   };
 
   const totalSize = files.reduce((acc, f) => acc + f.file.size, 0);
   const doneCount = files.filter(f => f.status === "done").length;
+  const errorCount = files.filter(f => f.status === "error").length;
+  const remainingCount = files.length - doneCount - errorCount;
 
   return (
     <div className="min-h-screen bg-mesh relative overflow-hidden">
@@ -189,7 +430,28 @@ export default function HomePage() {
               transition={{ duration: 0.4 }}
               className="space-y-8"
             >
-              {/* iOS banner */}
+              {/* Upload failure banner */}
+              <AnimatePresence>
+                {uploadError && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="rounded-2xl border border-red-400/30 bg-red-500/10 p-4 flex items-start gap-3"
+                  >
+                    <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-red-300">Upload thất bại</p>
+                      <p className="text-xs text-red-400/70 mt-0.5">{uploadError}</p>
+                    </div>
+                    <button onClick={() => setUploadError(null)} className="shrink-0 text-red-400/50 hover:text-red-300">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* iOS tip — no app/install needed, just the picker's own Format option */}
               <AnimatePresence>
                 {isIOS && (
                   <motion.div
@@ -201,15 +463,9 @@ export default function HomePage() {
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold text-amber-300">Bạn đang dùng iPhone</p>
                       <p className="text-xs text-amber-400/70 mt-0.5">
-                        Safari sẽ convert ảnh HEIC → JPEG khi upload. Dùng <strong>iOS Shortcut</strong> để giữ 100% chất lượng gốc.
+                        Để giữ ảnh HEIC gốc 100%: khi bảng chọn ảnh hiện ra, bấm <strong>Options</strong> ở trên cùng → đổi{" "}
+                        <strong>Format</strong> thành <strong>Current</strong> → rồi mới chọn ảnh.
                       </p>
-                      <button
-                        onClick={() => setShowIOSGuide(true)}
-                        className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-amber-300 hover:text-amber-200 transition-colors"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                        Tải Shortcut miễn phí →
-                      </button>
                     </div>
                   </motion.div>
                 )}
@@ -293,38 +549,41 @@ export default function HomePage() {
                       <span className="text-white/50">
                         <span className="text-white font-semibold">{files.length}</span> ảnh ·{" "}
                         <span className="text-white font-semibold">{formatBytes(totalSize)}</span>
+                        {remainingCount > 0 && (
+                          <span className="text-purple-300"> · đang upload {doneCount + errorCount}/{files.length}</span>
+                        )}
                       </span>
-                      <button
-                        onClick={() => setFiles([])}
-                        className="text-white/30 hover:text-red-400 transition-colors text-xs"
-                      >
-                        Xóa tất cả
-                      </button>
+                      <div className="flex items-center gap-3">
+                        {errorCount > 0 && (
+                          <button
+                            onClick={retryFailed}
+                            className="text-amber-400/70 hover:text-amber-300 transition-colors text-xs font-medium"
+                          >
+                            Thử lại {errorCount} ảnh lỗi
+                          </button>
+                        )}
+                        <button
+                          onClick={clearAllFiles}
+                          className="text-white/30 hover:text-red-400 transition-colors text-xs"
+                        >
+                          Xóa tất cả
+                        </button>
+                      </div>
                     </div>
 
                     {/* Grid */}
                     <div className="grid grid-cols-4 sm:grid-cols-6 gap-2">
                       {files.map((item, i) => (
-                        <motion.div
+                        <PhotoGridItem
                           key={item.id}
-                          initial={{ opacity: 0, scale: 0.7 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          exit={{ opacity: 0, scale: 0.7 }}
-                          transition={{ delay: i * 0.04 }}
-                          className="photo-card relative group aspect-square rounded-xl overflow-hidden bg-white/5"
-                        >
-                          <img src={item.preview} alt={item.file.name} className="w-full h-full object-cover" />
-                          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-                          <button
-                            onClick={() => removeFile(item.id)}
-                            className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                          >
-                            <X className="w-3 h-3 text-white" />
-                          </button>
-                          <div className="absolute bottom-1 left-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <p className="text-white text-[8px] truncate">{formatBytes(item.file.size)}</p>
-                          </div>
-                        </motion.div>
+                          id={item.id}
+                          preview={item.preview}
+                          fileName={item.file.name}
+                          fileSize={item.file.size}
+                          status={item.status}
+                          index={i}
+                          onRemove={removeFile}
+                        />
                       ))}
 
                       {/* Add more button */}
@@ -346,7 +605,7 @@ export default function HomePage() {
                         placeholder="Tên album • vd: Ngày hẹn hò 07/06 🌸"
                         value={title}
                         onChange={(e) => setTitle(e.target.value)}
-                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/25 focus:outline-none focus:border-purple-400/50 transition-colors"
+                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-base text-white placeholder-white/25 focus:outline-none focus:border-purple-400/50 transition-colors"
                       />
 
                       <div className="flex flex-wrap gap-3">
@@ -373,7 +632,7 @@ export default function HomePage() {
                               placeholder="Nhập mật khẩu..."
                               value={password}
                               onChange={(e) => setPassword(e.target.value)}
-                              className="flex-1 min-w-32 bg-white/5 border border-purple-400/30 rounded-xl px-4 py-2.5 text-sm text-white placeholder-white/25 focus:outline-none focus:border-purple-400/60 transition-colors"
+                              className="flex-1 min-w-32 bg-white/5 border border-purple-400/30 rounded-xl px-4 py-2.5 text-base text-white placeholder-white/25 focus:outline-none focus:border-purple-400/60 transition-colors"
                             />
                           )}
                         </AnimatePresence>
@@ -449,12 +708,20 @@ export default function HomePage() {
                 </div>
                 <h2 className="text-2xl font-bold">Đang upload...</h2>
                 <p className="text-white/40 text-sm">
-                  {doneCount}/{files.length} ảnh hoàn tất — giữ nguyên chất lượng gốc
+                  <span className="text-green-400 font-semibold">{doneCount} xong</span>
+                  {" · "}
+                  <span>{remainingCount} còn lại</span>
+                  {errorCount > 0 && (
+                    <>
+                      {" · "}
+                      <span className="text-red-400 font-semibold">{errorCount} lỗi</span>
+                    </>
+                  )}
                 </p>
-                {/* Overall progress */}
+                {/* Overall progress (counts settled items so it doesn't stall on failures) */}
                 <div className="w-full max-w-xs mx-auto h-1 bg-white/10 rounded-full overflow-hidden mt-4">
                   <motion.div
-                    animate={{ width: `${files.length ? (doneCount / files.length) * 100 : 0}%` }}
+                    animate={{ width: `${files.length ? ((doneCount + errorCount) / files.length) * 100 : 0}%` }}
                     className="h-full progress-shimmer rounded-full"
                   />
                 </div>
@@ -462,27 +729,14 @@ export default function HomePage() {
 
               <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
                 {files.map((item) => (
-                  <div key={item.id} className="glass rounded-xl p-3.5 flex items-center gap-3">
-                    <img src={item.preview} alt="" className="w-10 h-10 rounded-lg object-cover shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate text-white/80">{item.file.name}</p>
-                      <p className="text-xs text-white/30">{formatBytes(item.file.size)}</p>
-                      {item.status === "uploading" && (
-                        <div className="mt-1.5 h-1 bg-white/10 rounded-full overflow-hidden">
-                          <motion.div
-                            animate={{ width: `${item.progress}%` }}
-                            className="h-full progress-shimmer rounded-full"
-                          />
-                        </div>
-                      )}
-                    </div>
-                    <div className="shrink-0">
-                      {item.status === "done" && <CheckCircle2 className="w-5 h-5 text-green-400" />}
-                      {item.status === "uploading" && <Loader2 className="w-5 h-5 text-purple-400 animate-spin" />}
-                      {item.status === "error" && <X className="w-5 h-5 text-red-400" />}
-                      {item.status === "pending" && <div className="w-4 h-4 rounded-full border-2 border-white/20" />}
-                    </div>
-                  </div>
+                  <UploadingRow
+                    key={item.id}
+                    preview={item.preview}
+                    fileName={item.file.name}
+                    fileSize={item.file.size}
+                    status={item.status}
+                    progress={item.progress}
+                  />
                 ))}
               </div>
             </motion.div>
@@ -512,8 +766,14 @@ export default function HomePage() {
               <div>
                 <h2 className="text-3xl font-bold">Album sẵn sàng! 🎉</h2>
                 <p className="text-white/40 mt-2">
-                  {files.filter(f => f.status === "done").length} ảnh · {formatBytes(totalSize)} · chất lượng gốc 100%
+                  {doneCount} ảnh · {formatBytes(totalSize)} · chất lượng gốc 100%
                 </p>
+                {uploadFailCount > 0 && (
+                  <p className="text-red-400/80 text-sm mt-1">
+                    {uploadFailCount} ảnh lỗi, không có trong album: {" "}
+                    {files.filter(f => f.status === "error").map(f => f.file.name).join(", ")}
+                  </p>
+                )}
               </div>
 
               <div className="glass rounded-2xl p-6 space-y-3 text-left max-w-md mx-auto">
@@ -549,7 +809,16 @@ export default function HomePage() {
                   Xem album
                 </motion.a>
                 <button
-                  onClick={() => { setFiles([]); setAlbumId(null); setStep("upload"); setTitle(""); }}
+                  onClick={() => {
+                    clearAllFiles();
+                    setAlbumId(null);
+                    setStep("upload");
+                    setTitle("");
+                    setUploadFailCount(0);
+                    setUsePassword(false);
+                    setPassword("");
+                    setExpiry("never");
+                  }}
                   className="px-8 py-3.5 rounded-xl font-semibold text-white/50 border border-white/10 hover:border-white/20 hover:text-white/70 transition-all"
                 >
                   Tạo album mới
@@ -560,83 +829,6 @@ export default function HomePage() {
 
         </AnimatePresence>
       </main>
-
-      {/* iOS Shortcut Guide Modal */}
-      <AnimatePresence>
-        {showIOSGuide && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-4"
-            onClick={() => setShowIOSGuide(false)}
-          >
-            <motion.div
-              initial={{ y: 60, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 60, opacity: 0 }}
-              onClick={e => e.stopPropagation()}
-              className="glass rounded-3xl p-6 w-full max-w-md space-y-5"
-            >
-              {/* Header */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-400 to-pink-400 flex items-center justify-center">
-                    <Smartphone className="w-5 h-5 text-white" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-white">iOS Shortcut</h3>
-                    <p className="text-xs text-white/40">Giữ 100% chất lượng HEIC gốc</p>
-                  </div>
-                </div>
-                <button onClick={() => setShowIOSGuide(false)} className="w-8 h-8 rounded-lg glass flex items-center justify-center">
-                  <X className="w-4 h-4 text-white/60" />
-                </button>
-              </div>
-
-              {/* Why */}
-              <div className="bg-amber-500/10 border border-amber-400/20 rounded-xl p-3 text-xs text-amber-300/80 leading-relaxed">
-                <strong className="text-amber-300">Tại sao cần Shortcut?</strong> Safari tự convert HEIC → JPEG khi chọn từ thư viện ảnh.
-                iOS Shortcuts truy cập trực tiếp file gốc, không qua browser — giữ nguyên HEIC 100%.
-              </div>
-
-              {/* Steps */}
-              <div className="space-y-3">
-                {[
-                  { n: "1", text: "Tải file Shortcut về iPhone", sub: "Nhấn nút bên dưới, Safari tự mở Shortcuts app" },
-                  { n: "2", text: "Nhấn \"Add Shortcut\"", sub: "Shortcut tên \"Pixmoment Upload\" sẽ được thêm vào" },
-                  { n: "3", text: "Mở Shortcuts → chạy Pixmoment Upload", sub: "Chọn ảnh → đặt tên album → link tự copy vào clipboard" },
-                  { n: "4", text: "Gửi link cho người yêu 💕", sub: "Qua Zalo, Messenger, SMS — bất kỳ app nào" },
-                ].map(s => (
-                  <div key={s.n} className="flex items-start gap-3">
-                    <div className="w-6 h-6 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center shrink-0 mt-0.5">
-                      <span className="text-xs font-bold text-white">{s.n}</span>
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-white">{s.text}</p>
-                      <p className="text-xs text-white/40">{s.sub}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Download button */}
-              <a
-                href="/PixmomentUpload.shortcut"
-                download="PixmomentUpload.shortcut"
-                className="btn-primary w-full py-3.5 rounded-xl font-bold text-white flex items-center justify-center gap-2 text-sm"
-              >
-                <Download className="w-4 h-4" />
-                Tải iOS Shortcut (miễn phí)
-              </a>
-
-              <p className="text-center text-xs text-white/25">
-                Yêu cầu iOS 16+ · Shortcuts app (cài sẵn trên iPhone)
-              </p>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }

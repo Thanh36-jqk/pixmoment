@@ -1,19 +1,50 @@
 "use client";
 
-import { useState, useEffect, use } from "react";
+import { useState, useEffect, useCallback, use } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Download, Archive, Heart, ArrowLeft, Lock,
   ImageIcon, Info, X, ChevronLeft, ChevronRight,
-  CheckCircle2, Calendar, HardDrive, Eye
+  CheckCircle2, Calendar, HardDrive, Eye, Clock
 } from "lucide-react";
 import { cn, formatBytes, formatDate } from "@/lib/utils";
+import { useToast } from "@/components/toast";
 
 interface Photo {
   name: string;
   size: number;
   type: string;
   url: string;
+}
+
+// Fetches photos with bounded concurrency, yielding each as soon as it
+// resolves (order doesn't matter for a zip). Paired with client-zip's
+// lazy async-generator consumption, this keeps only `concurrency` photos'
+// worth of response bodies in flight/memory at a time, instead of every
+// photo in the album at once.
+async function* fetchPhotosConcurrently(photos: Photo[], concurrency: number) {
+  let cursor = 0;
+
+  function launch(slot: number): Promise<{ slot: number; name: string; input: Response }> | null {
+    if (cursor >= photos.length) return null;
+    const photo = photos[cursor++];
+    return fetch(photo.url).then((res) => {
+      if (!res.ok) throw new Error(`Failed to fetch ${photo.name}`);
+      return { slot, name: photo.name, input: res };
+    });
+  }
+
+  const slots: (Promise<{ slot: number; name: string; input: Response }> | null)[] = Array.from(
+    { length: Math.min(concurrency, photos.length) },
+    (_, i) => launch(i)
+  );
+
+  while (slots.some(Boolean)) {
+    const active = slots.filter((s): s is NonNullable<typeof s> => s !== null);
+    const { slot, name, input } = await Promise.race(active);
+    slots[slot] = launch(slot);
+    yield { name, input };
+  }
 }
 
 interface Album {
@@ -27,6 +58,7 @@ interface Album {
 }
 
 export default function AlbumPage({ params }: { params: Promise<{ id: string }> }) {
+  const toast = useToast();
   const { id } = use(params);
   const [album, setAlbum] = useState<Album | null>(null);
   const [loading, setLoading] = useState(true);
@@ -46,39 +78,51 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
 
   const fetchAlbum = async () => {
     setLoading(true);
-    const res = await fetch(`/api/albums/${id}`);
-    const data = await res.json();
+    try {
+      const res = await fetch(`/api/albums/${id}`);
+      const data = await res.json();
 
-    if (res.status === 404) { setError("Không tìm thấy album"); setLoading(false); return; }
-    if (res.status === 410) { setError("Album đã hết hạn"); setLoading(false); return; }
+      if (res.status === 404) { setError("Không tìm thấy album"); toast("Không tìm thấy album", "error"); setLoading(false); return; }
+      if (res.status === 410) { setError("Album đã hết hạn"); toast("Album đã hết hạn", "error"); setLoading(false); return; }
 
-    if (data.hasPassword) {
-      setNeedsPassword(true);
+      if (data.hasPassword) {
+        setNeedsPassword(true);
+        setLoading(false);
+        return;
+      }
+
+      setAlbum(data);
       setLoading(false);
-      return;
+    } catch {
+      setError("Không tải được album, kiểm tra mạng và thử lại");
+      toast("Không tải được album", "error");
+      setLoading(false);
     }
-
-    setAlbum(data);
-    setLoading(false);
   };
 
   const unlockAlbum = async () => {
-    const res = await fetch(`/api/albums/${id}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
-    });
+    try {
+      const res = await fetch(`/api/albums/${id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
 
-    if (!res.ok) { setPwError(true); return; }
-    const data = await res.json();
-    setAlbum(data);
-    setNeedsPassword(false);
+      if (!res.ok) { setPwError(true); toast("Mật khẩu không đúng", "error"); return; }
+      const data = await res.json();
+      setAlbum(data);
+      setNeedsPassword(false);
+      toast("Đã mở album", "success");
+    } catch {
+      toast("Không kết nối được, thử lại", "error");
+    }
   };
 
   const downloadPhoto = async (photo: Photo) => {
     setDownloading(photo.url);
     try {
       const res = await fetch(photo.url);
+      if (!res.ok) throw new Error("download failed");
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -86,6 +130,9 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
       a.download = photo.name;
       a.click();
       URL.revokeObjectURL(url);
+      toast(`Đã tải ${photo.name}`, "success");
+    } catch {
+      toast(`Tải ${photo.name} thất bại, thử lại`, "error");
     } finally {
       setTimeout(() => setDownloading(null), 1000);
     }
@@ -95,40 +142,57 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
     if (!album) return;
     setZipping(true);
 
-    const JSZip = (await import("jszip")).default;
-    const zip = new JSZip();
-    const folder = zip.folder(album.title) ?? zip;
+    try {
+      // client-zip streams each input straight into the zip output as it
+      // arrives — unlike JSZip (which buffers every file before it can
+      // generate anything), memory stays roughly constant regardless of
+      // album size instead of holding every original-quality photo at
+      // once. fetchPhotosConcurrently bounds how many are being fetched at
+      // a time so we're not opening 100-200 connections simultaneously either.
+      const { downloadZip } = await import("client-zip");
+      const response = downloadZip(fetchPhotosConcurrently(album.photos, 4));
+      const content = await response.blob();
+      const url = URL.createObjectURL(content);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${album.title}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
 
-    await Promise.all(
-      album.photos.map(async (photo) => {
-        const res = await fetch(photo.url);
-        const blob = await res.blob();
-        folder.file(photo.name, blob);
-      })
-    );
-
-    const content = await zip.generateAsync({ type: "blob" });
-    const url = URL.createObjectURL(content);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${album.title}.zip`;
-    a.click();
-    URL.revokeObjectURL(url);
-
-    setZipping(false);
-    setZipDone(true);
-    setTimeout(() => setZipDone(false), 3000);
+      setZipDone(true);
+      toast("Đã tải ZIP", "success");
+      setTimeout(() => setZipDone(false), 3000);
+    } catch {
+      toast("Nén ZIP thất bại, thử lại", "error");
+    } finally {
+      setZipping(false);
+    }
   };
 
-  const prevPhoto = () => {
-    if (lightbox === null || !album) return;
-    setLightbox((lightbox - 1 + album.photos.length) % album.photos.length);
-  };
+  const prevPhoto = useCallback(() => {
+    setLightbox((current) => {
+      if (current === null || !album) return current;
+      return (current - 1 + album.photos.length) % album.photos.length;
+    });
+  }, [album]);
 
-  const nextPhoto = () => {
-    if (lightbox === null || !album) return;
-    setLightbox((lightbox + 1) % album.photos.length);
-  };
+  const nextPhoto = useCallback(() => {
+    setLightbox((current) => {
+      if (current === null || !album) return current;
+      return (current + 1) % album.photos.length;
+    });
+  }, [album]);
+
+  useEffect(() => {
+    if (lightbox === null) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setLightbox(null);
+      else if (e.key === "ArrowLeft") prevPhoto();
+      else if (e.key === "ArrowRight") nextPhoto();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [lightbox, prevPhoto, nextPhoto]);
 
   // ── Loading ──
   if (loading) {
@@ -183,7 +247,7 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
               onChange={(e) => { setPassword(e.target.value); setPwError(false); }}
               onKeyDown={(e) => e.key === "Enter" && unlockAlbum()}
               className={cn(
-                "w-full bg-white/5 border rounded-xl px-4 py-3 text-sm text-white placeholder-white/30 focus:outline-none transition-colors",
+                "w-full bg-white/5 border rounded-xl px-4 py-3 text-base text-white placeholder-white/30 focus:outline-none transition-colors",
                 pwError ? "border-red-500/60" : "border-white/10 focus:border-purple-400/50"
               )}
             />
@@ -269,11 +333,12 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
             className="border-b border-white/5 overflow-hidden"
           >
             <div className="max-w-6xl mx-auto px-4 py-4">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
                 {[
                   { icon: ImageIcon, label: "Số ảnh", value: `${album.photos.length} ảnh` },
                   { icon: HardDrive, label: "Tổng dung lượng", value: formatBytes(album.totalSize) },
                   { icon: Calendar, label: "Ngày tạo", value: formatDate(new Date(album.createdAt)) },
+                  { icon: Clock, label: "Hết hạn", value: album.expiresAt ? formatDate(new Date(album.expiresAt)) : "Không hết hạn" },
                   { icon: Eye, label: "Chất lượng", value: "Gốc 100%" },
                 ].map((item) => (
                   <div key={item.label} className="glass rounded-xl p-3 flex items-center gap-3">
@@ -298,7 +363,7 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
               key={photo.url}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.04, duration: 0.4 }}
+              transition={{ delay: Math.min(i * 0.04, 0.5), duration: 0.4 }}
               className="masonry-item"
             >
               <div className="photo-card group relative rounded-xl overflow-hidden bg-white/5 cursor-pointer">
@@ -311,8 +376,18 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
                   loading="lazy"
                 />
 
-                {/* Overlay — always visible on mobile (no hover), hover on desktop */}
-                <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all duration-300">
+                {/* Overlay — always visible on mobile (no hover), hover on desktop.
+                    pointer-events must mirror opacity: an invisible-but-interactive
+                    overlay silently blocks clicks meant for the photo underneath
+                    (opacity alone doesn't disable hit-testing). It also needs its
+                    own onClick mirroring the image's — while hovering (the normal
+                    precursor to any real click), this overlay covers the whole
+                    photo, so without this a click anywhere except the tiny
+                    download button would hit the overlay and silently do nothing
+                    instead of opening the lightbox. */}
+                <div
+                  onClick={() => setLightbox(i)}
+                  className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 pointer-events-auto sm:pointer-events-none sm:group-hover:pointer-events-auto transition-all duration-300">
                   <div className="absolute bottom-0 left-0 right-0 p-2 sm:p-3 flex items-end justify-between">
                     <div className="min-w-0 hidden sm:block">
                       <p className="text-white text-xs font-medium truncate">{photo.name}</p>

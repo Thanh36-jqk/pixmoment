@@ -1,29 +1,56 @@
-import { put } from "@vercel/blob";
-import { NextRequest, NextResponse } from "next/server";
-import { nanoid } from "nanoid";
+import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
+import { NextResponse } from "next/server";
+import { getClientIp, isRateLimited, uploadTokenRatelimit } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 
-export async function POST(req: NextRequest) {
-  const formData = await req.formData();
-  const file = formData.get("file") as File | null;
+// Issues short-lived client tokens so the browser uploads bytes straight to
+// Vercel Blob instead of routing every photo through this serverless
+// function — needed once uploads scale to 50-100 photos at a time, since a
+// server round-trip per file would hit the function body-size limit and
+// serialize all the network traffic through a single invocation.
+//
+// There's no user auth to gate this route on, so it's rate-limited by IP
+// instead — Vercel's own docs warn a `handleUpload` route with no check in
+// `onBeforeGenerateToken` is open to the public.
+export async function POST(request: Request): Promise<NextResponse> {
+  const body = (await request.json()) as HandleUploadBody;
 
-  if (!file) {
-    return NextResponse.json({ error: "No file provided" }, { status: 400 });
+  // Only the actual "give me a token" request costs anything; the
+  // upload-completed webhook Vercel calls afterward on this same route
+  // shouldn't count against a visitor's quota.
+  if (body.type === "blob.generate-client-token") {
+    const ip = getClientIp(request);
+    if (await isRateLimited(uploadTokenRatelimit, ip)) {
+      return NextResponse.json({ error: "Too many upload requests, try again later" }, { status: 429 });
+    }
   }
 
-  const ext = file.name.split(".").pop() ?? "jpg";
-  const filename = `photos/${nanoid()}.${ext}`;
+  try {
+    const jsonResponse = await handleUpload({
+      body,
+      request,
+      onBeforeGenerateToken: async (pathname) => {
+        // The client is untrusted (no auth on this route) and gets to name
+        // its own pathname — without this check it could request a token
+        // for any path in the store, e.g. under albums/ instead of photos/.
+        if (!pathname.startsWith("photos/")) {
+          throw new Error("Invalid upload path");
+        }
+        return {
+          allowedContentTypes: ["image/*"],
+          addRandomSuffix: false,
+          maximumSizeInBytes: 200 * 1024 * 1024,
+        };
+      },
+      onUploadCompleted: async () => {},
+    });
 
-  const blob = await put(filename, file, {
-    access: "public",
-    contentType: file.type,
-  });
-
-  return NextResponse.json({
-    url: blob.url,
-    name: file.name,
-    size: file.size,
-    type: file.type,
-  });
+    return NextResponse.json(jsonResponse);
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Upload token error" },
+      { status: 400 }
+    );
+  }
 }
