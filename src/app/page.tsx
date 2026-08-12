@@ -442,7 +442,18 @@ export default function HomePage() {
     onDropRejected: (rejections) => {
       toast(`${rejections.length} file bị bỏ qua vì không phải ảnh`, "error");
     },
-    accept: { "image/*": [], "image/heic": [], "image/heif": [] },
+    // iOS Safari's native Photos picker hands back File objects with an
+    // empty `type` for HEIC (a long-standing WebKit quirk) — matching by
+    // MIME type alone rejects every photo silently, with no grid, no
+    // upload, nothing (dropzone's own "not an image" toast fires, but the
+    // real symptom is that valid photos never reach onDrop at all). Listing
+    // extensions here makes attr-accept fall back to matching by filename
+    // when the MIME type is blank, which is exactly this case.
+    accept: {
+      "image/*": [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".svg", ".avif"],
+      "image/heic": [".heic"],
+      "image/heif": [".heif"],
+    },
     multiple: true,
   });
 
