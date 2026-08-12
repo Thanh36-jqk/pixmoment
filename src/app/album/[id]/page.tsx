@@ -71,6 +71,12 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
   const [zipping, setZipping] = useState(false);
   const [zipDone, setZipDone] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
+  // No browser can decode camera RAW (or other exotic) formats — the file
+  // itself is fine (unaffected, still 100% downloadable), but the bare
+  // <img> would otherwise collapse to the browser's tiny broken-image icon
+  // and wreck the masonry column it sits in. Track which ones failed to
+  // decode so those can render a fixed-size placeholder instead.
+  const [undecodable, setUndecodable] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetchAlbum();
@@ -367,14 +373,25 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
               className="masonry-item"
             >
               <div className="photo-card group relative rounded-xl overflow-hidden bg-white/5 cursor-pointer">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={photo.url}
-                  alt={photo.name}
-                  className="w-full h-auto block"
-                  onClick={() => setLightbox(i)}
-                  loading="lazy"
-                />
+                {undecodable.has(photo.url) ? (
+                  <div
+                    onClick={() => setLightbox(i)}
+                    className="w-full aspect-square flex flex-col items-center justify-center gap-2 px-3 text-center"
+                  >
+                    <ImageIcon className="w-7 h-7 text-white/20" />
+                    <p className="text-white/40 text-xs truncate w-full">{photo.name}</p>
+                  </div>
+                ) : (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={photo.url}
+                    alt={photo.name}
+                    className="w-full h-auto block"
+                    onClick={() => setLightbox(i)}
+                    onError={() => setUndecodable((prev) => new Set(prev).add(photo.url))}
+                    loading="lazy"
+                  />
+                )}
 
                 {/* Overlay — always visible on mobile (no hover), hover on desktop.
                     pointer-events must mirror opacity: an invisible-but-interactive
@@ -467,11 +484,20 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
               onClick={(e) => e.stopPropagation()}
               className="relative mx-10 sm:mx-16 max-w-5xl"
             >
-              <img
-                src={album.photos[lightbox].url}
-                alt={album.photos[lightbox].name}
-                className="max-w-full max-h-[78vh] sm:max-h-[82vh] object-contain rounded-xl"
-              />
+              {undecodable.has(album.photos[lightbox].url) ? (
+                <div className="w-[80vw] max-w-md aspect-square flex flex-col items-center justify-center gap-3 glass rounded-xl">
+                  <ImageIcon className="w-10 h-10 text-white/20" />
+                  <p className="text-white/50 text-sm px-4 text-center truncate w-full">{album.photos[lightbox].name}</p>
+                  <p className="text-white/30 text-xs">Trình duyệt không xem trước được định dạng này — tải về để xem</p>
+                </div>
+              ) : (
+                <img
+                  src={album.photos[lightbox].url}
+                  alt={album.photos[lightbox].name}
+                  className="max-w-full max-h-[78vh] sm:max-h-[82vh] object-contain rounded-xl"
+                  onError={() => setUndecodable((prev) => new Set(prev).add(album.photos[lightbox].url))}
+                />
+              )}
 
               {/* Bottom bar */}
               <div className="absolute bottom-0 left-0 right-0 p-3 sm:p-4 bg-gradient-to-t from-black/80 rounded-b-xl flex items-center justify-between gap-2">
