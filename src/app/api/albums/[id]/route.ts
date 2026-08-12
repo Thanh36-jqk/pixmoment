@@ -36,8 +36,8 @@ export async function GET(
       return NextResponse.json({ error: "Album expired" }, { status: 410 });
     }
 
-    // Don't expose the password hash in the response
-    const { password, ...safeAlbum } = album;
+    // Don't expose the password hash or the creator's owner id
+    const { password, ownerId: _ownerId, ...safeAlbum } = album;
     return NextResponse.json({
       ...safeAlbum,
       hasPassword: !!password,
@@ -64,7 +64,7 @@ export async function POST(
       return NextResponse.json({ error: "Wrong password" }, { status: 401 });
     }
 
-    const { password, ...safeAlbum } = album;
+    const { password, ownerId: _ownerId, ...safeAlbum } = album;
     return NextResponse.json({ ...safeAlbum, hasPassword: true });
   } catch {
     return NextResponse.json({ error: "Error" }, { status: 500 });

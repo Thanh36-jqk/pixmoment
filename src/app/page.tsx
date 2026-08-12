@@ -10,6 +10,7 @@ import {
 import { cn, formatBytes, createThumbnail } from "@/lib/utils";
 import { UploadManager, type UploadTask } from "@/lib/uploadQueue";
 import { useToast } from "@/components/toast";
+import { getOwnerId } from "@/lib/ownerToken";
 import { nanoid } from "nanoid";
 
 interface FileItem {
@@ -535,6 +536,7 @@ export default function HomePage() {
           photos: uploadedPhotos,
           password: usePassword ? password : undefined,
           expiresIn: expiry,
+          ownerId: getOwnerId(),
         }),
       });
     } catch {
@@ -599,9 +601,16 @@ export default function HomePage() {
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          className="hidden sm:flex items-center gap-4 text-white/30 text-sm"
+          className="flex items-center gap-4 text-sm"
         >
-          <span className="flex items-center gap-1.5">
+          <a
+            href="/albums"
+            className="flex items-center gap-1.5 text-white/50 hover:text-white/80 transition-colors"
+          >
+            <ImageIcon className="w-4 h-4" />
+            <span className="hidden sm:inline">Album của tôi</span>
+          </a>
+          <span className="hidden sm:flex items-center gap-1.5 text-white/30">
             <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
             Ảnh gốc 100%
           </span>
