@@ -1,5 +1,6 @@
 import { upload } from "@vercel/blob/client";
 import type { PutBlobResult } from "@vercel/blob";
+import { inferRawContentType } from "./rawPhotoTypes";
 
 // Cap concurrent uploads so 50-100 photos don't all fight over bandwidth
 // (and the browser's own per-host connection limit) at once — a handful of
@@ -82,7 +83,13 @@ async function uploadOne(task: UploadTask, callbacks: InternalCallbacks): Promis
       const blob = await upload(pathname, task.file, {
         access: "public",
         handleUploadUrl: "/api/upload",
-        contentType: task.file.type || "application/octet-stream",
+        // Browsers/OS rarely know camera RAW MIME types, so file.type is
+        // often blank for them — and the server only allows "image/*"
+        // content types, so a bare "application/octet-stream" fallback
+        // would get RAW uploads rejected. inferRawContentType covers that
+        // gap by extension; anything else genuinely unknown still falls
+        // through to octet-stream (and is correctly rejected server-side).
+        contentType: task.file.type || inferRawContentType(task.file.name) || "application/octet-stream",
         multipart: task.file.size > MULTIPART_THRESHOLD_BYTES,
         onUploadProgress: ({ loaded, percentage }) => {
           callbacks.onProgress?.(task.id, percentage);

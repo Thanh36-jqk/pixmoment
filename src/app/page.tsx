@@ -11,6 +11,7 @@ import { cn, formatBytes, createThumbnail } from "@/lib/utils";
 import { UploadManager, type UploadTask } from "@/lib/uploadQueue";
 import { useToast } from "@/components/toast";
 import { getOwnerId } from "@/lib/ownerToken";
+import { RAW_EXTENSIONS } from "@/lib/rawPhotoTypes";
 import { nanoid } from "nanoid";
 
 interface FileItem {
@@ -451,7 +452,10 @@ export default function HomePage() {
     // extensions here makes attr-accept fall back to matching by filename
     // when the MIME type is blank, which is exactly this case.
     accept: {
-      "image/*": [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".svg", ".avif"],
+      "image/*": [
+        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".svg", ".avif",
+        ...RAW_EXTENSIONS,
+      ],
       "image/heic": [".heic"],
       "image/heif": [".heif"],
     },
@@ -503,7 +507,7 @@ export default function HomePage() {
         uploadedPhotos.push({
           name: f.file.name,
           size: f.file.size,
-          type: f.file.type,
+          type: result.blob.contentType,
           url: result.blob.url,
         });
       } else {
