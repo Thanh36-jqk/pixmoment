@@ -827,11 +827,15 @@ export default function HomePage() {
                     className="rounded-2xl border border-amber-400/30 bg-amber-500/10 p-4 flex items-start gap-3"
                   >
                     <Smartphone className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-                    <div className="flex-1 min-w-0">
+                    <div className="flex-1 min-w-0 space-y-1.5">
                       <p className="text-sm font-semibold text-amber-300">Bạn đang dùng iPhone</p>
-                      <p className="text-xs text-amber-400/70 mt-0.5">
+                      <p className="text-xs text-amber-400/70">
                         Để giữ ảnh HEIC gốc 100%: khi bảng chọn ảnh hiện ra, bấm <strong>Options</strong> ở trên cùng → đổi{" "}
                         <strong>Format</strong> thành <strong>Current</strong> → rồi mới chọn ảnh.
+                      </p>
+                      <p className="text-xs text-amber-400/70">
+                        <strong>Nhiều ảnh?</strong> Safari trên iPhone thường không nhận được nếu chọn quá nhiều 1 lần.
+                        Hãy chọn từng đợt <strong>~50 ảnh</strong>, đợi hiện lên rồi bấm <strong>+</strong> chọn thêm — tất cả vào chung 1 album.
                       </p>
                     </div>
                   </motion.div>
