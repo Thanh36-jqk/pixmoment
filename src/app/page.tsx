@@ -297,9 +297,31 @@ export default function HomePage() {
     bufferRows: 4,
   });
 
+  const [inAppBrowser, setInAppBrowser] = useState<string | null>(null);
   useEffect(() => {
     const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as unknown as Record<string,unknown>).MSStream;
     setIsIOS(ios);
+
+    // In-app browser (WebView) detection. These embedded browsers — Zalo,
+    // Messenger, Facebook, Instagram, etc. — routinely fail to hand
+    // multi-photo picker selections back to a file <input> (the change
+    // event never fires), so an upload silently does nothing. Confirmed on
+    // a real device: opening from a Zalo chat gave a Zalo WebView where 40
+    // photos produced no input-change at all. Nothing we can do in-page
+    // fixes the WebView itself, so we detect it and steer the user to a
+    // real browser instead.
+    const ua = navigator.userAgent;
+    const apps: [RegExp, string][] = [
+      [/Zalo/i, "Zalo"],
+      [/FBAN|FBAV|FB_IAB/i, "Facebook"],
+      [/Messenger/i, "Messenger"],
+      [/Instagram/i, "Instagram"],
+      [/Line\//i, "LINE"],
+      [/MicroMessenger/i, "WeChat"],
+      [/TikTok|musical_ly|BytedanceWebview/i, "TikTok"],
+    ];
+    const hit = apps.find(([re]) => re.test(ua));
+    if (hit) setInAppBrowser(hit[1]);
   }, []);
   const [copied, setCopied] = useState(false);
 
@@ -712,6 +734,43 @@ export default function HomePage() {
               transition={{ duration: 0.4 }}
               className="space-y-8"
             >
+              {/* In-app browser warning — its WebView often can't hand
+                  multi-photo selections to the file input, so upload silently
+                  does nothing. Steer the user to a real browser. */}
+              {inAppBrowser && (
+                <motion.div
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="rounded-2xl border border-red-400/40 bg-red-500/10 p-4 flex items-start gap-3"
+                >
+                  <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0 space-y-2">
+                    <p className="text-sm font-semibold text-red-300">
+                      Bạn đang mở trong {inAppBrowser} — cần mở bằng trình duyệt thật
+                    </p>
+                    <p className="text-xs text-red-400/80">
+                      Trình duyệt trong {inAppBrowser} thường không chọn được ảnh (nhất là nhiều ảnh).
+                      {isIOS
+                        ? " Bấm nút ••• hoặc  ↑  ở góc màn hình → chọn “Mở trong Safari”."
+                        : " Bấm nút ⋮ ở góc màn hình → chọn “Mở trong trình duyệt / Chrome”."}
+                    </p>
+                    <button
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(window.location.origin);
+                          toast("Đã copy link — dán vào Safari để mở", "success");
+                        } catch {
+                          toast("Không copy được, hãy copy link trên thanh địa chỉ", "error");
+                        }
+                      }}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-500/20 border border-red-400/40 text-red-200 hover:bg-red-500/30 transition-colors"
+                    >
+                      Copy link để mở bằng {isIOS ? "Safari" : "trình duyệt"}
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+
               {/* Upload failure banner */}
               <AnimatePresence>
                 {uploadError && (
