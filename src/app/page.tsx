@@ -303,6 +303,57 @@ export default function HomePage() {
   }, []);
   const [copied, setCopied] = useState(false);
 
+  // Opt-in on-device diagnostics: only active when the page is opened with
+  // ?debug=1. Surfaces what actually happens during a file selection on a
+  // real device (esp. iOS Safari, which we can't reproduce off-device) —
+  // whether the picker delivered files, whether react-dropzone accepted or
+  // rejected them, any thrown error, and whether the tab got backgrounded
+  // or killed. Everything routes through logDiag, which no-ops unless the
+  // flag is on, so normal visitors are unaffected.
+  const diagOnRef = useRef(false);
+  const [diagOn, setDiagOn] = useState(false);
+  const [diagLog, setDiagLog] = useState<string[]>([]);
+  const logDiag = useCallback((msg: string) => {
+    if (!diagOnRef.current) return;
+    const ts = new Date().toISOString().slice(11, 23);
+    setDiagLog((prev) => [`${ts}  ${msg}`, ...prev].slice(0, 300));
+  }, []);
+
+  useEffect(() => {
+    if (!new URLSearchParams(window.location.search).has("debug")) return;
+    diagOnRef.current = true;
+    setDiagOn(true);
+
+    const nav = navigator as Navigator & { deviceMemory?: number };
+    logDiag(`UA=${navigator.userAgent}`);
+    logDiag(`deviceMemory=${nav.deviceMemory ?? "?"}GB cores=${navigator.hardwareConcurrency ?? "?"}`);
+
+    // Capture-phase so it fires for any <input type=file> change regardless
+    // of how react-dropzone wires its own handler.
+    const onChange = (e: Event) => {
+      const t = e.target as HTMLInputElement | null;
+      if (t && t.type === "file") logDiag(`input change → files=${t.files?.length ?? 0}`);
+    };
+    const onErr = (e: ErrorEvent) => logDiag(`window.error: ${e.message}`);
+    const onRej = (e: PromiseRejectionEvent) =>
+      logDiag(`unhandledrejection: ${(e.reason && e.reason.message) || String(e.reason)}`);
+    const onVis = () => logDiag(`visibility=${document.visibilityState}`);
+    const onHide = () => logDiag(`pagehide (tab suspended/closed)`);
+
+    document.addEventListener("change", onChange, true);
+    window.addEventListener("error", onErr);
+    window.addEventListener("unhandledrejection", onRej);
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("pagehide", onHide);
+    return () => {
+      document.removeEventListener("change", onChange, true);
+      window.removeEventListener("error", onErr);
+      window.removeEventListener("unhandledrejection", onRej);
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("pagehide", onHide);
+    };
+  }, [logDiag]);
+
   // Keep a live ref so the unmount cleanup below can revoke whatever
   // previews exist at that point, without re-registering the effect on
   // every files change.
@@ -420,6 +471,7 @@ export default function HomePage() {
   }, []);
 
   const onDrop = useCallback((accepted: File[]) => {
+    logDiag(`onDrop → accepted=${accepted.length}`);
     const newItems: FileItem[] = accepted.map((file) => ({
       id: nanoid(),
       file,
@@ -430,7 +482,7 @@ export default function HomePage() {
     setFiles((prev) => [...prev, ...newItems]);
     getManager().enqueue(newItems.map((f): UploadTask => ({ id: f.id, file: f.file })));
     generateThumbnails(newItems);
-  }, [getManager, generateThumbnails]);
+  }, [getManager, generateThumbnails, logDiag]);
 
   const retryFailed = () => {
     const failed = files.filter((f) => f.status === "error");
@@ -442,6 +494,9 @@ export default function HomePage() {
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     onDropRejected: (rejections) => {
+      logDiag(
+        `onDropRejected → count=${rejections.length} firstErr=${rejections[0]?.errors?.[0]?.code ?? "?"} name=${rejections[0]?.file?.name ?? "?"} type=${rejections[0]?.file?.type || "(blank)"}`
+      );
       toast(`${rejections.length} file bị bỏ qua vì không phải ảnh`, "error");
     },
     // iOS Safari's native Photos picker hands back File objects with an
@@ -583,6 +638,29 @@ export default function HomePage() {
 
   return (
     <div className="min-h-screen bg-mesh relative overflow-hidden">
+      {/* On-device diagnostics panel (only when opened with ?debug=1) */}
+      {diagOn && (
+        <div className="fixed bottom-0 left-0 right-0 z-[100] max-h-[45vh] bg-black/90 border-t border-purple-500/40 text-[10px] leading-tight text-green-300 font-mono flex flex-col">
+          <div className="flex items-center justify-between px-2 py-1 border-b border-white/10 shrink-0">
+            <span className="text-white/70">DEBUG · {diagLog.length} dòng</span>
+            <div className="flex gap-2">
+              <button
+                onClick={() => navigator.clipboard?.writeText(diagLog.slice().reverse().join("\n")).then(() => toast("Đã copy log", "success"), () => {})}
+                className="px-2 py-0.5 rounded bg-purple-500/40 text-white"
+              >
+                Copy log
+              </button>
+              <button onClick={() => setDiagLog([])} className="px-2 py-0.5 rounded bg-white/10 text-white/70">
+                Xóa
+              </button>
+            </div>
+          </div>
+          <div className="overflow-y-auto px-2 py-1 whitespace-pre-wrap break-all">
+            {diagLog.length === 0 ? "Chọn ảnh để xem log..." : diagLog.join("\n")}
+          </div>
+        </div>
+      )}
+
       {/* Ambient blobs */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden">
         <div className="absolute -top-32 -left-32 w-96 h-96 rounded-full bg-purple-600/10 blur-3xl" />
