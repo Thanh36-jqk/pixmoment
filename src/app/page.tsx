@@ -325,28 +325,51 @@ export default function HomePage() {
   }, []);
   const [copied, setCopied] = useState(false);
 
-  // Opt-in on-device diagnostics: only active when the page is opened with
-  // ?debug=1. Surfaces what actually happens during a file selection on a
-  // real device (esp. iOS Safari, which we can't reproduce off-device) —
-  // whether the picker delivered files, whether react-dropzone accepted or
-  // rejected them, any thrown error, and whether the tab got backgrounded
-  // or killed. Everything routes through logDiag, which no-ops unless the
-  // flag is on, so normal visitors are unaffected.
+  // On-device diagnostics. Enabled by visiting with ?debug=1; that also sets
+  // a localStorage flag so it stays on for this device afterward (?debug=0
+  // turns it off) — a query param wouldn't survive the tab reload that an
+  // iOS memory-kill triggers. Crucially, the log is PERSISTED to
+  // localStorage on every entry, so if iOS silently kills/reloads the tab
+  // mid-batch (which looks like "nothing happened, no log"), the events
+  // right before death survive and are visible on the next load. No-ops
+  // unless enabled, so normal visitors are unaffected.
+  const DIAG_LOG_KEY = "pixmoment_diag_log";
+  const DIAG_FLAG_KEY = "pixmoment_debug";
   const diagOnRef = useRef(false);
   const [diagOn, setDiagOn] = useState(false);
   const [diagLog, setDiagLog] = useState<string[]>([]);
   const logDiag = useCallback((msg: string) => {
     if (!diagOnRef.current) return;
     const ts = new Date().toISOString().slice(11, 23);
-    setDiagLog((prev) => [`${ts}  ${msg}`, ...prev].slice(0, 300));
+    const line = `${ts}  ${msg}`;
+    setDiagLog((prev) => {
+      const next = [line, ...prev].slice(0, 400);
+      try { localStorage.setItem(DIAG_LOG_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
   }, []);
 
   useEffect(() => {
-    if (!new URLSearchParams(window.location.search).has("debug")) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("debug") === "0") {
+      try { localStorage.removeItem(DIAG_FLAG_KEY); localStorage.removeItem(DIAG_LOG_KEY); } catch {}
+      return;
+    }
+    let flagged = false;
+    try { flagged = localStorage.getItem(DIAG_FLAG_KEY) === "1"; } catch {}
+    const on = params.has("debug") || flagged;
+    if (!on) return;
+    try { localStorage.setItem(DIAG_FLAG_KEY, "1"); } catch {}
     diagOnRef.current = true;
     setDiagOn(true);
 
+    // Restore any log persisted before a reload/crash, then mark this load.
+    try {
+      const saved = localStorage.getItem(DIAG_LOG_KEY);
+      if (saved) setDiagLog(JSON.parse(saved));
+    } catch {}
     const nav = navigator as Navigator & { deviceMemory?: number };
+    logDiag(`──── PAGE LOAD ${new Date().toISOString()} ────`);
     logDiag(`UA=${navigator.userAgent}`);
     logDiag(`deviceMemory=${nav.deviceMemory ?? "?"}GB cores=${navigator.hardwareConcurrency ?? "?"}`);
 
@@ -672,7 +695,10 @@ export default function HomePage() {
               >
                 Copy log
               </button>
-              <button onClick={() => setDiagLog([])} className="px-2 py-0.5 rounded bg-white/10 text-white/70">
+              <button
+                onClick={() => { setDiagLog([]); try { localStorage.removeItem(DIAG_LOG_KEY); } catch {} }}
+                className="px-2 py-0.5 rounded bg-white/10 text-white/70"
+              >
                 Xóa
               </button>
             </div>
