@@ -4,6 +4,7 @@ import { nanoid } from "nanoid";
 import { albumCreateRatelimit, getClientIp, isRateLimited } from "@/lib/rateLimit";
 import { hashPassword } from "@/lib/password";
 import { PRIVATE_BLOB_TOKEN } from "@/lib/privateBlob";
+import { getExpiryDate } from "@/lib/albums";
 import type { AlbumSummary } from "@/types";
 
 export const runtime = "nodejs";
@@ -11,14 +12,6 @@ export const runtime = "nodejs";
 // nanoid()'s default alphabet/length — see src/lib/ownerToken.ts.
 const OWNER_ID_RE = /^[A-Za-z0-9_-]{16,32}$/;
 const MAX_HISTORY_ENTRIES = 200;
-
-function getExpiryDate(expiresIn: string): string | undefined {
-  const now = new Date();
-  if (expiresIn === "1d")  return new Date(now.getTime() + 86400000).toISOString();
-  if (expiresIn === "7d")  return new Date(now.getTime() + 7 * 86400000).toISOString();
-  if (expiresIn === "30d") return new Date(now.getTime() + 30 * 86400000).toISOString();
-  return undefined;
-}
 
 // Best-effort history index at owners/{ownerId}.json — a plain array, not a
 // database, so this is a read-modify-write with no locking. Two albums
