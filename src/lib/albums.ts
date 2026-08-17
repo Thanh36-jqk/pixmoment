@@ -61,11 +61,16 @@ export async function readAlbum(id: string): Promise<StoredAlbum | null> {
 const MAX_HISTORY_ENTRIES = 200;
 
 // Persists an album's JSON to the private store (create or overwrite).
+// cacheControlMaxAge: 0 is essential — album JSON is mutable (edit, password
+// change), and Vercel Blob otherwise caches objects for a month, so a read
+// right after a write would return the stale version and edits/password
+// changes would appear not to take effect until the cache expired.
 export async function writeAlbum(album: StoredAlbum): Promise<void> {
   await put(`albums/${album.id}.json`, JSON.stringify(album), {
     access: "private",
     contentType: "application/json",
     allowOverwrite: true,
+    cacheControlMaxAge: 0,
     token: PRIVATE_BLOB_TOKEN,
   });
 }
@@ -93,6 +98,9 @@ export async function upsertOwnerHistory(ownerId: string, entry: AlbumSummary): 
     access: "private",
     contentType: "application/json",
     allowOverwrite: true,
+    // Mutable index — see writeAlbum. Without this the "My albums" list would
+    // show stale titles/counts/covers after an edit.
+    cacheControlMaxAge: 0,
     token: PRIVATE_BLOB_TOKEN,
   });
 }
