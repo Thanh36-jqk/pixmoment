@@ -13,6 +13,7 @@ import { useToast } from "@/components/toast";
 import { getOwnerId } from "@/lib/ownerToken";
 import { RAW_EXTENSIONS } from "@/lib/rawPhotoTypes";
 import { nanoid } from "nanoid";
+import QRCode from "qrcode";
 
 interface FileItem {
   id: string;
@@ -694,6 +695,18 @@ export default function HomePage() {
     ? `${window.location.origin}/album/${albumId}`
     : "";
 
+  // QR of the share link on the done screen — handy for opening on another
+  // device (e.g. handing your phone to someone to scan).
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!shareUrl) return;
+    let cancelled = false;
+    QRCode.toDataURL(shareUrl, { width: 320, margin: 1 })
+      .then((u) => { if (!cancelled) setQrDataUrl(u); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [shareUrl]);
+
   const copyLink = async () => {
     try {
       await navigator.clipboard.writeText(shareUrl);
@@ -1203,6 +1216,13 @@ export default function HomePage() {
                     {copied ? "✓ Đã copy" : "Copy"}
                   </motion.button>
                 </div>
+                {qrDataUrl && (
+                  <div className="flex flex-col items-center gap-1.5 pt-1">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={qrDataUrl} alt="Mã QR link album" className="w-40 h-40 rounded-xl bg-white p-2" />
+                    <span className="text-[10px] text-white/30">Quét mã để mở trên máy khác</span>
+                  </div>
+                )}
                 <p className="text-xs text-white/25 text-center">
                   Gửi link này qua bất kỳ app nào — người nhận tải về file gốc
                 </p>

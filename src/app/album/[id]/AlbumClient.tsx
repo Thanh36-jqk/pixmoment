@@ -2,13 +2,16 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import QRCode from "qrcode";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Download, Archive, Heart, ArrowLeft, Lock,
   ImageIcon, Info, X, ChevronLeft, ChevronRight,
-  CheckCircle2, Calendar, HardDrive, Eye, Clock
+  CheckCircle2, Calendar, HardDrive, Eye, Clock,
+  Pencil, QrCode, CheckSquare, Square
 } from "lucide-react";
 import { cn, formatBytes, formatDate } from "@/lib/utils";
+import { getOwnerId } from "@/lib/ownerToken";
 import { useToast } from "@/components/toast";
 
 interface Photo {
@@ -72,6 +75,12 @@ export default function AlbumClient({ id }: { id: string }) {
   const [zipping, setZipping] = useState(false);
   const [zipDone, setZipDone] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [isOwner, setIsOwner] = useState(false);
+  // Selection mode for downloading a chosen subset (not the whole album).
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  // Data-URL of the share-link QR, generated lazily when the QR panel opens.
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   // No browser can decode camera RAW (or other exotic) formats — the file
   // itself is fine (unaffected, still 100% downloadable), but the bare
   // <img> would otherwise collapse to the browser's tiny broken-image icon
@@ -82,13 +91,34 @@ export default function AlbumClient({ id }: { id: string }) {
   const fetchAlbum = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/albums/${id}`);
+      // Pass the ownerId so the creator gets the full album back (and an
+      // isOwner flag) without needing to type their own password.
+      const res = await fetch(`/api/albums/${id}?ownerId=${getOwnerId()}`);
       const data = await res.json();
 
       if (res.status === 404) { setError("Không tìm thấy album"); toast("Không tìm thấy album", "error"); setLoading(false); return; }
       if (res.status === 410) { setError("Album đã hết hạn"); toast("Album đã hết hạn", "error"); setLoading(false); return; }
 
+      if (data.isOwner) {
+        setIsOwner(true);
+        setAlbum(data);
+        setLoading(false);
+        return;
+      }
+
       if (data.hasPassword) {
+        // Remember a successful unlock for this session so a refresh (or an
+        // iOS tab reload) doesn't force the password prompt again.
+        try {
+          const cached = sessionStorage.getItem(`pixmoment_album_${id}`);
+          if (cached) {
+            setAlbum(JSON.parse(cached));
+            setLoading(false);
+            return;
+          }
+        } catch {
+          // sessionStorage unavailable (private mode etc.) — just prompt.
+        }
         setNeedsPassword(true);
         setLoading(false);
         return;
@@ -130,6 +160,8 @@ export default function AlbumClient({ id }: { id: string }) {
       const data = await res.json();
       setAlbum(data);
       setNeedsPassword(false);
+      // Remember for this session so a reload doesn't re-prompt.
+      try { sessionStorage.setItem(`pixmoment_album_${id}`, JSON.stringify(data)); } catch {}
       toast("Đã mở album", "success");
     } catch {
       toast("Không kết nối được, thử lại", "error");
@@ -156,10 +188,9 @@ export default function AlbumClient({ id }: { id: string }) {
     }
   };
 
-  const downloadAllAsZip = async () => {
-    if (!album) return;
+  const zipPhotos = async (photos: Photo[], filename: string) => {
+    if (photos.length === 0) return;
     setZipping(true);
-
     try {
       // client-zip streams each input straight into the zip output as it
       // arrives — unlike JSZip (which buffers every file before it can
@@ -168,12 +199,12 @@ export default function AlbumClient({ id }: { id: string }) {
       // once. fetchPhotosConcurrently bounds how many are being fetched at
       // a time so we're not opening 100-200 connections simultaneously either.
       const { downloadZip } = await import("client-zip");
-      const response = downloadZip(fetchPhotosConcurrently(album.photos, 4));
+      const response = downloadZip(fetchPhotosConcurrently(photos, 4));
       const content = await response.blob();
       const url = URL.createObjectURL(content);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${album.title}.zip`;
+      a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
 
@@ -185,6 +216,48 @@ export default function AlbumClient({ id }: { id: string }) {
     } finally {
       setZipping(false);
     }
+  };
+
+  const downloadAllAsZip = () => {
+    if (!album) return;
+    zipPhotos(album.photos, `${album.title}.zip`);
+  };
+
+  const downloadSelectedAsZip = () => {
+    if (!album || selected.size === 0) return;
+    const picked = album.photos.filter((_, i) => selected.has(i));
+    zipPhotos(picked, `${album.title} (${picked.length} ảnh).zip`);
+  };
+
+  const toggleSelecting = () => {
+    setSelecting((on) => !on);
+    setSelected(new Set());
+  };
+
+  const toggleSelect = (index: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
+
+  const shareUrl = typeof window !== "undefined" ? `${window.location.origin}/album/${id}` : "";
+
+  const openQr = async () => {
+    try {
+      const dataUrl = await QRCode.toDataURL(shareUrl, { width: 320, margin: 1 });
+      setQrDataUrl(dataUrl);
+    } catch {
+      toast("Không tạo được mã QR", "error");
+    }
+  };
+
+  // In selection mode a tile toggles its checkbox; otherwise it opens the lightbox.
+  const handleTileClick = (i: number) => {
+    if (selecting) toggleSelect(i);
+    else setLightbox(i);
   };
 
   const prevPhoto = useCallback(() => {
@@ -309,6 +382,32 @@ export default function AlbumClient({ id }: { id: string }) {
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {isOwner && (
+              <Link
+                href={`/album/${id}/edit`}
+                title="Sửa album"
+                className="w-9 h-9 rounded-xl glass border border-white/10 flex items-center justify-center hover:border-purple-400/30 transition-colors"
+              >
+                <Pencil className="w-4 h-4 text-white/60" />
+              </Link>
+            )}
+            <button
+              onClick={openQr}
+              title="Mã QR"
+              className="w-9 h-9 rounded-xl glass border border-white/10 flex items-center justify-center hover:border-purple-400/30 transition-colors"
+            >
+              <QrCode className="w-4 h-4 text-white/60" />
+            </button>
+            <button
+              onClick={toggleSelecting}
+              title="Chọn ảnh để tải"
+              className={cn(
+                "w-9 h-9 rounded-xl glass border flex items-center justify-center transition-colors",
+                selecting ? "border-purple-400/60 text-purple-300" : "border-white/10 text-white/60 hover:border-purple-400/30"
+              )}
+            >
+              <CheckSquare className="w-4 h-4" />
+            </button>
             <button
               onClick={() => setInfoOpen(!infoOpen)}
               className="w-9 h-9 rounded-xl glass border border-white/10 flex items-center justify-center hover:border-purple-400/30 transition-colors"
@@ -384,10 +483,20 @@ export default function AlbumClient({ id }: { id: string }) {
               transition={{ delay: Math.min(i * 0.04, 0.5), duration: 0.4 }}
               className="masonry-item"
             >
-              <div className="photo-card group relative rounded-xl overflow-hidden bg-white/5 cursor-pointer">
+              <div className={cn(
+                "photo-card group relative rounded-xl overflow-hidden bg-white/5 cursor-pointer",
+                selecting && selected.has(i) && "ring-2 ring-purple-400"
+              )}>
+                {selecting && (
+                  <div className="absolute top-1.5 left-1.5 z-20 pointer-events-none">
+                    {selected.has(i)
+                      ? <CheckSquare className="w-5 h-5 text-purple-300" />
+                      : <Square className="w-5 h-5 text-white/70 drop-shadow" />}
+                  </div>
+                )}
                 {undecodable.has(photo.url) ? (
                   <div
-                    onClick={() => setLightbox(i)}
+                    onClick={() => handleTileClick(i)}
                     className="w-full aspect-square flex flex-col items-center justify-center gap-2 px-3 text-center"
                   >
                     <ImageIcon className="w-7 h-7 text-white/20" />
@@ -406,7 +515,7 @@ export default function AlbumClient({ id }: { id: string }) {
                     src={photo.thumbnailUrl ?? photo.url}
                     alt={photo.name}
                     className="w-full h-auto block"
-                    onClick={() => setLightbox(i)}
+                    onClick={() => handleTileClick(i)}
                     onError={() => setUndecodable((prev) => new Set(prev).add(photo.url))}
                     loading="lazy"
                   />
@@ -422,7 +531,7 @@ export default function AlbumClient({ id }: { id: string }) {
                     download button would hit the overlay and silently do nothing
                     instead of opening the lightbox. */}
                 <div
-                  onClick={() => setLightbox(i)}
+                  onClick={() => handleTileClick(i)}
                   className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 pointer-events-auto sm:pointer-events-none sm:group-hover:pointer-events-auto transition-all duration-300">
                   <div className="absolute bottom-0 left-0 right-0 p-2 sm:p-3 flex items-end justify-between">
                     <div className="min-w-0 hidden sm:block">
@@ -453,11 +562,76 @@ export default function AlbumClient({ id }: { id: string }) {
       </main>
 
       {/* Footer */}
-      <div className="border-t border-white/5 py-6 text-center">
+      <div className={cn("border-t border-white/5 py-6 text-center", selecting && "pb-24")}>
         <p className="text-white/20 text-sm flex items-center justify-center gap-1.5">
           Made with <Heart className="w-3.5 h-3.5 text-pink-500 fill-pink-500" /> by Pixmoment
         </p>
       </div>
+
+      {/* Selection action bar */}
+      <AnimatePresence>
+        {selecting && (
+          <motion.div
+            initial={{ y: 80, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 80, opacity: 0 }}
+            className="fixed bottom-0 left-0 right-0 z-40 border-t border-white/10 glass"
+          >
+            <div className="max-w-6xl mx-auto px-3 sm:px-4 py-3 flex items-center gap-3">
+              <span className="text-sm text-white/70">{selected.size} ảnh đã chọn</span>
+              <button
+                onClick={() => setSelected(new Set(album.photos.map((_, i) => i)))}
+                className="text-xs text-white/50 hover:text-white/80"
+              >
+                Chọn hết
+              </button>
+              {selected.size > 0 && (
+                <button onClick={() => setSelected(new Set())} className="text-xs text-white/50 hover:text-white/80">
+                  Bỏ chọn
+                </button>
+              )}
+              <div className="flex-1" />
+              <button onClick={toggleSelecting} className="px-3 py-2 rounded-xl text-sm text-white/50 border border-white/10 hover:text-white/70">
+                Xong
+              </button>
+              <motion.button
+                whileTap={{ scale: 0.97 }}
+                onClick={downloadSelectedAsZip}
+                disabled={selected.size === 0 || zipping}
+                className="btn-primary px-4 py-2 rounded-xl text-sm font-semibold text-white flex items-center gap-2 disabled:opacity-50"
+              >
+                <Archive className="w-4 h-4" />
+                Tải {selected.size > 0 ? `${selected.size} ảnh` : "ZIP"}
+              </motion.button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* QR modal */}
+      <AnimatePresence>
+        {qrDataUrl && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            onClick={() => setQrDataUrl(null)}
+            className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center px-4"
+          >
+            <motion.div
+              initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }}
+              onClick={(e) => e.stopPropagation()}
+              className="glass rounded-2xl p-6 space-y-4 text-center max-w-xs w-full"
+            >
+              <h3 className="font-semibold text-white">Quét để mở album</h3>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={qrDataUrl} alt="QR code" className="w-full rounded-xl bg-white p-2" />
+              <p className="text-xs text-white/40 break-all">{shareUrl}</p>
+              <button onClick={() => setQrDataUrl(null)} className="btn-primary w-full py-2.5 rounded-xl text-sm font-semibold text-white">
+                Đóng
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Lightbox */}
       <AnimatePresence>

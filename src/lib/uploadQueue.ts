@@ -35,6 +35,28 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Uploads a single original photo to photos/{id}.{ext}. A simpler, standalone
+// counterpart to the UploadManager pool — used by the album editor's "add
+// photos", where batches are small and the pool's adaptive concurrency isn't
+// worth the wiring. Returns null on failure so the caller can skip that file.
+export async function uploadPhoto(
+  id: string,
+  file: File
+): Promise<{ url: string; contentType: string; size: number } | null> {
+  const ext = file.name.split(".").pop() ?? "jpg";
+  try {
+    const blob = await upload(`photos/${id}.${ext}`, file, {
+      access: "public",
+      handleUploadUrl: "/api/upload",
+      contentType: file.type || inferRawContentType(file.name) || "application/octet-stream",
+      multipart: file.size > MULTIPART_THRESHOLD_BYTES,
+    });
+    return { url: blob.url, contentType: blob.contentType, size: file.size };
+  } catch {
+    return null;
+  }
+}
+
 // Uploads a photo's small JPEG thumbnail to thumbs/{id}.jpg on the public
 // store (same client-direct path as originals). Best-effort: a failure returns
 // null and the caller simply omits thumbnailUrl, so the album grid falls back
