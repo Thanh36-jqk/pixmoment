@@ -300,6 +300,10 @@ export default function HomePage() {
   const [inAppBrowser, setInAppBrowser] = useState<string | null>(null);
   useEffect(() => {
     const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as unknown as Record<string,unknown>).MSStream;
+    // Derived from navigator, which doesn't exist during SSR — this one-shot
+    // post-mount sync is intentional (a lazy initializer would either crash on
+    // the server or cause a hydration mismatch).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsIOS(ios);
 
     // In-app browser (WebView) detection. These embedded browsers — Zalo,
@@ -321,6 +325,7 @@ export default function HomePage() {
       [/TikTok|musical_ly|BytedanceWebview/i, "TikTok"],
     ];
     const hit = apps.find(([re]) => re.test(ua));
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (hit) setInAppBrowser(hit[1]);
   }, []);
   const [copied, setCopied] = useState(false);
@@ -361,6 +366,9 @@ export default function HomePage() {
     if (!on) return;
     try { localStorage.setItem(DIAG_FLAG_KEY, "1"); } catch {}
     diagOnRef.current = true;
+    // Enablement is decided from the URL query + localStorage, both read-only
+    // post-mount — deliberate one-shot sync, same rationale as setIsIOS above.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDiagOn(true);
 
     // Restore any log persisted before a reload/crash, then mark this load.

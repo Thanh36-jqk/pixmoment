@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, use } from "react";
+import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Download, Archive, Heart, ArrowLeft, Lock,
@@ -78,11 +79,7 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
   // decode so those can render a fixed-size placeholder instead.
   const [undecodable, setUndecodable] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
-    fetchAlbum();
-  }, [id]);
-
-  const fetchAlbum = async () => {
+  const fetchAlbum = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch(`/api/albums/${id}`);
@@ -104,7 +101,15 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
       toast("Không tải được album", "error");
       setLoading(false);
     }
-  };
+  }, [id, toast]);
+
+  useEffect(() => {
+    // Fetch the album on mount / when the id changes — a genuine external-data
+    // sync. It flips loading state synchronously on entry, which the rule
+    // flags, but that's the intended behaviour for a load-on-mount fetch.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchAlbum();
+  }, [fetchAlbum]);
 
   const unlockAlbum = async () => {
     try {
@@ -220,10 +225,10 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
         <div className="text-center space-y-4">
           <div className="text-6xl">💔</div>
           <h1 className="text-2xl font-bold text-white">{error}</h1>
-          <a href="/" className="inline-flex items-center gap-2 text-purple-400 hover:text-purple-300 transition-colors">
+          <Link href="/" className="inline-flex items-center gap-2 text-purple-400 hover:text-purple-300 transition-colors">
             <ArrowLeft className="w-4 h-4" />
             Tạo album mới
-          </a>
+          </Link>
         </div>
       </div>
     );
@@ -284,9 +289,9 @@ export default function AlbumPage({ params }: { params: Promise<{ id: string }> 
       {/* Header */}
       <header className="sticky top-0 z-40 border-b border-white/5 glass">
         <div className="max-w-6xl mx-auto px-3 sm:px-4 py-3 flex items-center gap-2 sm:gap-4">
-          <a href="/" className="w-9 h-9 rounded-xl glass border border-white/10 flex items-center justify-center hover:border-purple-400/30 transition-colors shrink-0">
+          <Link href="/" className="w-9 h-9 rounded-xl glass border border-white/10 flex items-center justify-center hover:border-purple-400/30 transition-colors shrink-0">
             <ArrowLeft className="w-4 h-4 text-white/60" />
-          </a>
+          </Link>
 
           <div className="flex-1 min-w-0">
             <h1 className="font-bold text-white truncate text-sm sm:text-base">{album.title}</h1>

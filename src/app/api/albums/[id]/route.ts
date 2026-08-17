@@ -37,12 +37,19 @@ export async function GET(
       return NextResponse.json({ error: "Album expired" }, { status: 410 });
     }
 
-    // Don't expose the password hash or the creator's owner id
+    // A password-protected album must NOT hand out its photos here — this
+    // route is unauthenticated, so returning the photo list (URLs point at a
+    // public blob store) would let anyone with the album id bypass the
+    // password entirely by reading it straight off the API. Only expose that
+    // a password is required; the photos come back solely from POST below,
+    // after verifyPassword succeeds.
+    if (album.password) {
+      return NextResponse.json({ id: album.id, hasPassword: true });
+    }
+
+    // No password — safe to return, minus the (empty) hash and owner id.
     const { password, ownerId: _ownerId, ...safeAlbum } = album;
-    return NextResponse.json({
-      ...safeAlbum,
-      hasPassword: !!password,
-    });
+    return NextResponse.json({ ...safeAlbum, hasPassword: false });
   } catch {
     return NextResponse.json({ error: "Album not found" }, { status: 404 });
   }

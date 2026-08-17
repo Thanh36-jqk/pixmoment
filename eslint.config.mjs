@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Standalone CommonJS build/util scripts — not part of the app bundle, so
+    // the app's TS/React lint rules (e.g. no-require-imports) don't apply.
+    "scripts/**",
   ]),
 ]);
 
