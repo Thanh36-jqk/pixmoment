@@ -3,6 +3,10 @@ import { readAlbum } from "@/lib/albums";
 import AlbumClient from "./AlbumClient";
 
 export const runtime = "nodejs";
+// Read the album fresh for metadata — no Data-Cache snapshot, so an edited
+// title/cover is reflected in the link preview.
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 // Per-album metadata so a shared link renders a real preview card (cover +
 // title + count) in chat apps, instead of the generic site-wide tags. Runs on

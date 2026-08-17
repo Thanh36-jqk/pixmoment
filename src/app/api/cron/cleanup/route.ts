@@ -4,6 +4,9 @@ import { PRIVATE_BLOB_TOKEN } from "@/lib/privateBlob";
 import { deleteAlbum, readAlbum } from "@/lib/albums";
 
 export const runtime = "nodejs";
+// Read fresh — the sweep must see current expiry, not a Data-Cache snapshot.
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 // Expiry used to be enforced only at read time (GET returns 410 for an expired
 // album), but the underlying photos — on the PUBLIC store, reachable by their

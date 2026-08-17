@@ -13,6 +13,11 @@ import {
 import { albumUnlockRatelimit, getClientIp, isRateLimited } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
+// The album JSON is fetched (internally by @vercel/blob's get) on every read.
+// Without this, Next's Data Cache can memoize that fetch and keep serving a
+// stale album after an edit/password change. Force every read fresh.
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 // nanoid()'s default alphabet/length — see src/lib/ownerToken.ts.
 const OWNER_ID_RE = /^[A-Za-z0-9_-]{16,32}$/;

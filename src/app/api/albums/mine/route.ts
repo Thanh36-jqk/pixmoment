@@ -4,6 +4,10 @@ import { PRIVATE_BLOB_TOKEN } from "@/lib/privateBlob";
 import type { AlbumSummary } from "@/types";
 
 export const runtime = "nodejs";
+// Keep the history index fresh — Next's Data Cache must not memoize the blob
+// fetch, or "My albums" would show stale titles/covers after an edit.
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 // nanoid()'s default alphabet/length — see src/lib/ownerToken.ts.
 const OWNER_ID_RE = /^[A-Za-z0-9_-]{16,32}$/;
