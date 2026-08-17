@@ -163,6 +163,14 @@ export default function AlbumEditPage({ params }: { params: Promise<{ id: string
         toast(data?.error ?? "Lưu thất bại, thử lại", "error");
         return;
       }
+      // Hand the just-saved album to the view so it shows instantly, ahead of
+      // Blob's ~15s overwrite propagation (see AlbumClient).
+      try {
+        const saved = await res.json();
+        sessionStorage.setItem(`pixmoment_fresh_${id}`, JSON.stringify(saved));
+      } catch {
+        // Non-fatal — the view will just read from the API instead.
+      }
       toast("Đã lưu album", "success");
       router.push(`/album/${id}`);
     } catch {

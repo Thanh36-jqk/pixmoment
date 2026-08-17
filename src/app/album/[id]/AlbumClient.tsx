@@ -90,6 +90,23 @@ export default function AlbumClient({ id }: { id: string }) {
 
   const fetchAlbum = useCallback(async () => {
     setLoading(true);
+    // One-shot fresh handoff from the editor: Vercel Blob overwrites take ~15s
+    // to propagate, so right after an edit a normal read would still return the
+    // old album. The editor stashes the just-saved album here so the person who
+    // made the edit sees it immediately; it's consumed once, then normal reads
+    // (fresh by then) take over.
+    try {
+      const fresh = sessionStorage.getItem(`pixmoment_fresh_${id}`);
+      if (fresh) {
+        sessionStorage.removeItem(`pixmoment_fresh_${id}`);
+        setIsOwner(true);
+        setAlbum(JSON.parse(fresh));
+        setLoading(false);
+        return;
+      }
+    } catch {
+      // sessionStorage unavailable — fall through to a normal read.
+    }
     try {
       // Pass the ownerId so the creator gets the full album back (and an
       // isOwner flag) without needing to type their own password.
