@@ -25,7 +25,11 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
     };
   }
 
-  const cover = album.photos[0]?.thumbnailUrl ?? album.photos[0]?.url;
+  // Only ever use a real (JPEG) thumbnail as the preview image — never a raw
+  // original, which for a RAW/HEIC first photo isn't a displayable image and
+  // would render as a broken card. If no photo has a thumbnail, omit the image
+  // and let the card fall back to the site default.
+  const cover = album.photos.find((p) => p.thumbnailUrl)?.thumbnailUrl;
   const title = `${album.title} · Pixmoment`;
   const description = `${album.photos.length} ảnh chất lượng gốc — xem và tải về.`;
 
