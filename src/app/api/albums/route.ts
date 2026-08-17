@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
         createdAt: album.createdAt,
         photoCount: photos.length,
         totalSize: album.totalSize,
-        coverUrl: photos[0]?.url,
+        coverUrl: photos[0]?.thumbnailUrl ?? photos[0]?.url,
       });
     } catch {
       // History tracking is best-effort — an album must still be usable

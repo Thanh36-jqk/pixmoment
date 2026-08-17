@@ -27,6 +27,7 @@ export interface StoredPhoto {
   size: number;
   type: string;
   url: string;
+  thumbnailUrl?: string;
 }
 
 // The album exactly as persisted — includes the fields the API strips before
@@ -46,11 +47,13 @@ export interface StoredAlbum {
 // id or a missing/unreadable blob, so callers get one uniform "not found".
 export async function readAlbum(id: string): Promise<StoredAlbum | null> {
   if (!VALID_ALBUM_ID.test(id)) return null;
-  const result = await get(`albums/${id}.json`, { access: "private", token: PRIVATE_BLOB_TOKEN });
-  if (!result || result.statusCode !== 200) return null;
   try {
+    const result = await get(`albums/${id}.json`, { access: "private", token: PRIVATE_BLOB_TOKEN });
+    if (!result || result.statusCode !== 200) return null;
     return JSON.parse(await new Response(result.stream).text()) as StoredAlbum;
   } catch {
+    // Blob fetch/parse failure (network, bad token, malformed JSON) — treat as
+    // "not found" so callers (incl. generateMetadata) degrade gracefully.
     return null;
   }
 }
@@ -79,10 +82,13 @@ async function removeFromOwnerHistory(ownerId: string, albumId: string): Promise
 // a photo already gone) doesn't leave the others undone — the goal is "as
 // deleted as possible", not an all-or-nothing transaction.
 export async function deleteAlbum(album: StoredAlbum): Promise<void> {
-  const photoUrls = album.photos?.map((p) => p.url).filter(Boolean) ?? [];
-  if (photoUrls.length > 0) {
+  // Both the originals and their thumbnails live on the public store.
+  const blobUrls = (album.photos ?? [])
+    .flatMap((p) => [p.url, p.thumbnailUrl])
+    .filter((u): u is string => Boolean(u));
+  if (blobUrls.length > 0) {
     try {
-      await del(photoUrls, { token: PUBLIC_BLOB_TOKEN });
+      await del(blobUrls, { token: PUBLIC_BLOB_TOKEN });
     } catch {
       // Photos may already be gone, or the public token unset in this env —
       // still remove the JSON below so the album stops resolving.

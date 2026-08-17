@@ -23,17 +23,18 @@ if (!redis && process.env.NODE_ENV !== "test") {
   );
 }
 
-// A batch of 200 photos issues ~200 requests to the token route in a few
-// minutes — and each internal retry (see uploadQueue.ts, up to 2 per file
-// on flaky connections) requests a fresh token too, so a straight 200 cap
-// left zero headroom: any retries at all during a full-size batch would
-// self-inflict 429s indistinguishable from a real network failure. 500
-// gives real headroom for that case while still being far below what
-// scripted abuse would need to matter.
+// A batch of 200 photos now issues ~400 token requests in a few minutes —
+// one per original PLUS one per thumbnail (see uploadThumbnail) — and each
+// internal retry (uploadQueue.ts, up to 2 per original on flaky connections)
+// requests a fresh token too. A straight 400 cap would leave zero headroom:
+// any retries at all during a full-size batch would self-inflict 429s
+// indistinguishable from a real network failure. 1000 gives real headroom for
+// that case while still being far below what scripted abuse would need to
+// matter.
 export const uploadTokenRatelimit = redis
   ? new Ratelimit({
       redis,
-      limiter: Ratelimit.slidingWindow(500, "10 m"),
+      limiter: Ratelimit.slidingWindow(1000, "10 m"),
       prefix: "ratelimit:upload-token",
     })
   : null;
@@ -43,6 +44,19 @@ export const albumCreateRatelimit = redis
       redis,
       limiter: Ratelimit.slidingWindow(20, "10 m"),
       prefix: "ratelimit:albums",
+    })
+  : null;
+
+// The album-unlock POST verifies a password, and without a cap it's an open
+// brute-force oracle: a password-protected album could be hammered with
+// unlimited guesses. Keyed per IP+album (see the route) so guessing one album
+// can't exhaust another visitor's budget. 10/min is generous for a human
+// mistyping but far below what a scripted guess-loop needs to matter.
+export const albumUnlockRatelimit = redis
+  ? new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(10, "1 m"),
+      prefix: "ratelimit:album-unlock",
     })
   : null;
 

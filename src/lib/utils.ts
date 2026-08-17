@@ -49,7 +49,7 @@ function scaledDimensions(width: number, height: number, maxDimension: number) {
   return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
 }
 
-function bitmapToThumbnailUrl(source: CanvasImageSource, sourceWidth: number, sourceHeight: number): Promise<string> {
+function bitmapToThumbnailBlob(source: CanvasImageSource, sourceWidth: number, sourceHeight: number): Promise<Blob> {
   const { width, height } = scaledDimensions(sourceWidth, sourceHeight, THUMBNAIL_MAX_DIMENSION);
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -57,9 +57,9 @@ function bitmapToThumbnailUrl(source: CanvasImageSource, sourceWidth: number, so
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("2d context unavailable");
   ctx.drawImage(source, 0, 0, width, height);
-  return new Promise<string>((resolve, reject) =>
+  return new Promise<Blob>((resolve, reject) =>
     canvas.toBlob(
-      (b) => (b ? resolve(URL.createObjectURL(b)) : reject(new Error("toBlob failed"))),
+      (b) => (b ? resolve(b) : reject(new Error("toBlob failed"))),
       "image/jpeg",
       0.7
     )
@@ -70,7 +70,7 @@ function bitmapToThumbnailUrl(source: CanvasImageSource, sourceWidth: number, so
 // file. Still goes through the same small-canvas downscale, so a format
 // createImageBitmap rejects but <img> can still decode (browser-dependent)
 // doesn't fall back to the original crash-prone full-res blob URL.
-async function createThumbnailViaImgElement(file: File): Promise<string> {
+async function createThumbnailViaImgElement(file: File): Promise<Blob> {
   const sourceUrl = URL.createObjectURL(file);
   try {
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -79,20 +79,27 @@ async function createThumbnailViaImgElement(file: File): Promise<string> {
       el.onerror = () => reject(new Error("image decode failed"));
       el.src = sourceUrl;
     });
-    return await bitmapToThumbnailUrl(img, img.naturalWidth, img.naturalHeight);
+    return await bitmapToThumbnailBlob(img, img.naturalWidth, img.naturalHeight);
   } finally {
     URL.revokeObjectURL(sourceUrl);
   }
 }
 
-export async function createThumbnail(file: File): Promise<string> {
+// Produces a small (<=320px) JPEG thumbnail Blob for a photo, or null when the
+// browser can't decode the format (e.g. HEIC outside Safari). The Blob is
+// reused two ways by the caller: a local object-URL preview during upload, and
+// a tiny thumbnail blob uploaded alongside the original so the album grid never
+// has to download full-res photos just to render a preview. Returning null (not
+// throwing) keeps callers simple — no thumbnail just means "fall back to the
+// original", and the original upload is unaffected either way.
+export async function createThumbnailBlob(file: File): Promise<Blob | null> {
   try {
     const bitmap = await withTimeout(
       createImageBitmap(file, { resizeWidth: DECODE_RESIZE_CAP, resizeQuality: "medium" }),
       DECODE_TIMEOUT_MS
     );
     try {
-      return await bitmapToThumbnailUrl(bitmap, bitmap.width, bitmap.height);
+      return await bitmapToThumbnailBlob(bitmap, bitmap.width, bitmap.height);
     } finally {
       bitmap.close();
     }
@@ -104,11 +111,7 @@ export async function createThumbnail(file: File): Promise<string> {
     try {
       return await withTimeout(createThumbnailViaImgElement(file), DECODE_TIMEOUT_MS);
     } catch {
-      // No preview rather than falling back to the original full-res blob
-      // URL, which is exactly the crash-prone path this function exists to
-      // avoid. The upload itself is unaffected — it always sends the
-      // original file regardless of whether a thumbnail could be made.
-      return "";
+      return null;
     }
   }
 }

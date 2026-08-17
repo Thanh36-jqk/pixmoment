@@ -7,8 +7,8 @@ import {
   Upload, ImageIcon, Sparkles, Lock, Clock, ArrowRight,
   CheckCircle2, X, FileImage, Loader2, Heart, Smartphone, AlertTriangle
 } from "lucide-react";
-import { cn, formatBytes, createThumbnail } from "@/lib/utils";
-import { UploadManager, type UploadTask } from "@/lib/uploadQueue";
+import { cn, formatBytes, createThumbnailBlob } from "@/lib/utils";
+import { UploadManager, uploadThumbnail, type UploadTask } from "@/lib/uploadQueue";
 import { useToast } from "@/components/toast";
 import { getOwnerId } from "@/lib/ownerToken";
 import { RAW_EXTENSIONS } from "@/lib/rawPhotoTypes";
@@ -21,6 +21,9 @@ interface FileItem {
   status: "pending" | "uploading" | "done" | "error";
   progress: number;
   url?: string;
+  // Uploaded thumbnail URL (thumbs/{id}.jpg). Sent with the album so the
+  // viewer's grid loads tiny thumbnails instead of full-res originals.
+  thumbnailUrl?: string;
   error?: string;
 }
 
@@ -516,8 +519,20 @@ export default function HomePage() {
     const worker = async () => {
       while (next < items.length) {
         const item = items[next++];
-        const preview = await createThumbnail(item.file);
+        const blob = await createThumbnailBlob(item.file);
+        if (!blob) continue; // undecodable (e.g. HEIC off-Safari) — no preview/thumb
+        // Local preview from the same blob we're about to upload — one decode,
+        // two uses.
+        const preview = URL.createObjectURL(blob);
         setFiles((prev) => prev.map((f) => (f.id === item.id ? { ...f, preview } : f)));
+        // Upload the thumbnail in the background; when it lands, record its URL
+        // so it can be attached to the album. Best-effort — a miss just means
+        // the grid falls back to the original for that one photo.
+        uploadThumbnail(item.id, blob).then((thumbnailUrl) => {
+          if (thumbnailUrl) {
+            setFiles((prev) => prev.map((f) => (f.id === item.id ? { ...f, thumbnailUrl } : f)));
+          }
+        });
       }
     };
     for (let i = 0; i < THUMBNAIL_CONCURRENCY; i++) worker();
@@ -605,8 +620,13 @@ export default function HomePage() {
     const filesSnapshot = files;
     await getManager().waitForIdle();
     const results = getManager().getResults(filesSnapshot.map((f) => f.id));
+    // Thumbnails upload in the background and may have finished during the
+    // wait above, so read their URLs from the live ref (freshest) rather than
+    // the snapshot taken before the await. A photo whose thumbnail isn't ready
+    // yet just ships without one and falls back to the original in the grid.
+    const latestById = new Map(filesRef.current.map((f) => [f.id, f]));
 
-    const uploadedPhotos: { name: string; size: number; type: string; url: string }[] = [];
+    const uploadedPhotos: { name: string; size: number; type: string; url: string; thumbnailUrl?: string }[] = [];
     let failCount = 0;
 
     filesSnapshot.forEach((f) => {
@@ -617,6 +637,7 @@ export default function HomePage() {
           size: f.file.size,
           type: result.blob.contentType,
           url: result.blob.url,
+          thumbnailUrl: latestById.get(f.id)?.thumbnailUrl,
         });
       } else {
         failCount += 1;

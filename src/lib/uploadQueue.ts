@@ -35,6 +35,24 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Uploads a photo's small JPEG thumbnail to thumbs/{id}.jpg on the public
+// store (same client-direct path as originals). Best-effort: a failure returns
+// null and the caller simply omits thumbnailUrl, so the album grid falls back
+// to the original. No retries — a missing thumbnail is a cosmetic downgrade,
+// not a lost photo, and not worth extra token requests.
+export async function uploadThumbnail(id: string, blob: Blob): Promise<string | null> {
+  try {
+    const result = await upload(`thumbs/${id}.jpg`, blob, {
+      access: "public",
+      handleUploadUrl: "/api/upload",
+      contentType: "image/jpeg",
+    });
+    return result.url;
+  } catch {
+    return null;
+  }
+}
+
 // Non-standard API — not in TS's DOM lib, and Safari (desktop + iOS) has
 // zero support for it, so this only ever kicks in on Chromium/Android.
 // Everywhere else silently keeps DEFAULT_CONCURRENCY, unchanged.

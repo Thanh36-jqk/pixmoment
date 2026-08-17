@@ -32,9 +32,10 @@ export async function POST(request: Request): Promise<NextResponse> {
       request,
       onBeforeGenerateToken: async (pathname) => {
         // The client is untrusted (no auth on this route) and gets to name
-        // its own pathname — without this check it could request a token
-        // for any path in the store, e.g. under albums/ instead of photos/.
-        if (!pathname.startsWith("photos/")) {
+        // its own pathname — without this check it could request a token for
+        // any path in the store. Only the two prefixes the app writes are
+        // allowed: photos/ (originals) and thumbs/ (grid thumbnails).
+        if (!pathname.startsWith("photos/") && !pathname.startsWith("thumbs/")) {
           throw new Error("Invalid upload path");
         }
         return {

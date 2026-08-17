@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyPassword } from "@/lib/password";
 import { deleteAlbum, readAlbum } from "@/lib/albums";
+import { albumUnlockRatelimit, getClientIp, isRateLimited } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 
@@ -47,6 +48,13 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+
+  // Rate-limit password guesses per IP+album so this can't be used as an
+  // unlimited brute-force oracle.
+  if (await isRateLimited(albumUnlockRatelimit, `${getClientIp(req)}:${id}`)) {
+    return NextResponse.json({ error: "Quá nhiều lần thử, đợi một lát rồi thử lại" }, { status: 429 });
+  }
+
   const { password: inputPassword } = await req.json();
 
   try {

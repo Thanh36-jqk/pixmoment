@@ -106,6 +106,14 @@ html {
 .masonry-item {
   break-inside: avoid;
   margin-bottom: 12px;
+  /* Native windowing: the browser skips layout/paint/decode for items far
+     offscreen, so a 200+ photo album stays light without any JS virtualization
+     (which is awkward for a variable-height CSS-columns masonry anyway). The
+     intrinsic-size is a rough per-item placeholder so scroll height/position
+     don't jump before an item is first rendered; the browser refines it once
+     the real content is measured. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 320px;
 }
 
 /* Floating particles */
